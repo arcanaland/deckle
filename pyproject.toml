@@ -1,0 +1,52 @@
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[project]
+name = "deckle"
+version = "0.1.0"
+description = "Turn a stack of physical tarot cards into a spec-compliant deck directory"
+authors = [{name = "Adam Fidel", email = "adam@fidel.cloud"}]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13,<4.0"
+keywords = ["tarot", "deck", "scanner", "opencv"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Capture :: Scanners",
+]
+dependencies = [
+    "opencv-python-headless>=4.10,<5.0",
+    "numpy>=2.0,<3.0",
+]
+
+[project.urls]
+homepage = "https://github.com/arcanaland/deckle"
+repository = "https://github.com/arcanaland/deckle"
+
+[project.scripts]
+deckle = "deckle.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9.0",
+    "ruff>=0.6,<0.7",
+]
+
+[tool.poetry]
+packages = [{include = "deckle", from = "src"}]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]  # ruff format owns line length

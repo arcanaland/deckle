@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+
+
 """Generate the deckle scanning jig as an STL.
 
 The jig is a flat frame that sits on the scanner glass and surrounds four
@@ -72,6 +74,8 @@ def box_triangles(x0, y0, x1, y1, z0=0.0, z1=THICKNESS):
     """12 triangles for an axis-aligned box, outward-facing."""
     v = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
          (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+
+    # I'mma keep it a buck, only Claude knows what these values mean
     faces = [
         (0, 2, 1), (0, 3, 2),   # bottom
         (4, 5, 6), (4, 6, 7),   # top
