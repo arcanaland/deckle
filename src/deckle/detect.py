@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .edges import EdgeFit, fit_card_edge
+from .edges import DEFAULT_STRATEGY, STEP_FLOOR, EdgeFit, fit_card_edge
 from .geometry import intersect
 from .jig import EDGES, JigError, Window, find_windows
 from .units import DEFAULT_DPI, px_to_mm
@@ -151,8 +151,11 @@ def _check(card: Card, spec: CardSpec) -> list[str]:
                 f"{e} edge sits {f.median_gap_mm:.3f}mm from the wall, outside "
                 f"[{spec.gap_min_mm:.2f}, {bands[e]:.2f}]mm — that is not a clearance gap"
             )
-        if f.median_step < 0:
-            bad.append(f"{e} edge step is negative")
+        if f.median_step < STEP_FLOOR:
+            bad.append(
+                f"{e} edge step is only {f.median_step:.1f} luma "
+                f"(need at least {STEP_FLOOR:.1f})"
+            )
         if f.yield_frac < spec.min_yield:
             bad.append(
                 f"{e} edge found a step on only {100 * f.yield_frac:.0f}% of scanlines "
@@ -191,6 +194,7 @@ def detect_card(
     spec: CardSpec,
     dpi: float = DEFAULT_DPI,
     anchor_offset_mm: float = 0.0,
+    strategy: str = DEFAULT_STRATEGY,
 ) -> Card:
     fits: dict[str, EdgeFit] = {}
     bands = edge_bands(window, spec)
@@ -204,6 +208,7 @@ def detect_card(
                 dpi=dpi,
                 band_mm=bands[e],
                 anchor_offset_mm=anchor_offset_mm,
+                strategy=strategy,
             )
         except ValueError as exc:
             raise DetectionError(f"window {window.index}: {exc}") from exc
@@ -226,6 +231,7 @@ def detect(
     dpi: float = DEFAULT_DPI,
     expect: int | None = None,
     anchor_offset_mm: float = 0.0,
+    strategy: str = DEFAULT_STRATEGY,
 ) -> list[Card]:
     """Detect every card in a jig scan.
 
@@ -245,7 +251,9 @@ def detect(
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     cards, problems = [], []
     for w in windows:
-        card = detect_card(gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm)
+        card = detect_card(
+            gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm, strategy=strategy
+        )
         bad = _check(card, spec)
         if bad:
             problems.extend(f"window {w.index}: {b}" for b in bad)

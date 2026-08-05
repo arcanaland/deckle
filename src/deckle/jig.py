@@ -37,6 +37,18 @@ NOTCH_OPEN_MM = 20.0
 # A window is 73 x 123mm nominal. Anything under a third of that area is debris.
 MIN_WINDOW_AREA_MM2 = 0.33 * 73.0 * 123.0
 
+# The jig is two halves butted together, and the seam is tape — so the green mask is only
+# *sometimes* one connected component. Taking the largest one silently discards a whole
+# printed half: measured on 20260804191325, where all four windows are plainly in frame,
+# the mask splits into 4.27M and 4.01M px and only two windows were found. A scan that
+# costs four cards because tape moved is the abandonment failure mode in miniature.
+#
+# So every component large enough to *be* a printed half is accepted. One half is
+# 200 x 136mm with two 73 x 123mm windows in it — ~9200mm^2 of green. The largest non-frame
+# green thing measured anywhere is a 59 x 31mm artwork blob (~1800mm^2), so half of a half
+# separates the two with room to spare and needs no tuning.
+MIN_FRAME_PIECE_MM2 = 0.5 * (200.0 * 136.0 - 2 * 73.0 * 123.0)
+
 EDGES = ("top", "bottom", "left", "right")
 
 
@@ -74,12 +86,28 @@ def green_mask(bgr: np.ndarray) -> np.ndarray:
     return cv2.inRange(hsv, GREEN_LO, GREEN_HI)
 
 
-def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, int]:
+def _frame_pieces(mask: np.ndarray, dpi: float) -> tuple[np.ndarray, int]:
+    """Union of every green component big enough to be a printed jig half.
+
+    Not the largest component: see MIN_FRAME_PIECE_MM2. Returning the union rather than
+    the pieces keeps everything downstream unchanged — `_holes` floods from outside the
+    image, so two disconnected halves enclose their own windows independently, and an open
+    seam is a channel to the outside rather than a hole.
+    """
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
     if n < 2:
         raise JigError("no green pixels found — is the jig in the scan?")
-    best = int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) + 1
-    return (labels == best).astype(np.uint8) * 255, int(stats[best, cv2.CC_STAT_AREA])
+    mm2_per_px = px_to_mm(1.0, dpi) ** 2
+    keep = [
+        i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] * mm2_per_px >= MIN_FRAME_PIECE_MM2
+    ]
+    if not keep:
+        biggest = float(stats[1:, cv2.CC_STAT_AREA].max()) * mm2_per_px
+        raise JigError(
+            f"largest green region is only {biggest:.0f}mm^2 — no jig found in this scan"
+        )
+    frame = np.isin(labels, keep).astype(np.uint8) * 255
+    return frame, int(sum(stats[i, cv2.CC_STAT_AREA] for i in keep))
 
 
 def _holes(frame: np.ndarray) -> np.ndarray:
@@ -168,14 +196,14 @@ def find_windows(bgr: np.ndarray, dpi: float = DEFAULT_DPI) -> list[Window]:
     printed half and so has two. Nothing here assumes four.
     """
     mask = green_mask(bgr)
-    frame, frame_area = _largest_component(mask)
+    frame, frame_area = _frame_pieces(mask, dpi)
 
-    # A frame occupies a large, connected fraction of the bed. A scan with no jig still
-    # has *some* greenish pixels (artwork, noise), so require real coverage before
-    # believing there is a frame at all.
+    # A frame occupies a large fraction of the bed. A scan with no jig still has *some*
+    # greenish pixels (artwork, noise), so require real coverage before believing there is
+    # a frame at all. Summed over the accepted pieces, since half a jig is still a jig.
     if px_to_mm(1.0, dpi) ** 2 * frame_area < 0.25 * 200.0 * 136.0:
         raise JigError(
-            f"largest green region is only "
+            f"green frame covers only "
             f"{px_to_mm(1.0, dpi) ** 2 * frame_area:.0f}mm^2 — no jig found in this scan"
         )
 

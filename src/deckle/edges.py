@@ -61,6 +61,35 @@ STEP_FLOOR = 12.0
 # The card must still be there after the edge, or it was not an edge.
 SUSTAIN_MM = 0.8
 
+# How the card edge is picked out of the candidate steps in the band. The right answer
+# depends on what is behind the card, and the foam pad changed that — so this is a named
+# choice rather than a constant.
+#
+# "innermost" — the last sustained step before flat card. Written for the *unpadded* jig,
+#   where the 3mm frame casts a shadow ramp into the clearance gap that is steeper than the
+#   card's own step (35 luma/px against 12-24), so the edge could never be "the strongest".
+#   It is the innermost, because past it there is nothing but card.
+#
+# "brightest" — the largest *positive* step in the band. The pad removes the ramp it was
+#   written against: the gap now images as flat black (measured luma 0-4, sd ~1), so the
+#   card edge is the largest step by 6x. Measured over the 8 cards of 2026-08-04, the true
+#   edge is +150 to +248 luma while every competing candidate is either the artwork
+#   boundary at -32 to -40 or the wall itself at -93. Requiring a *rise* into the card is
+#   what makes the wall unpickable — that was RFC-001's +1654um failure — and it costs
+#   nothing, because a card face is brighter than black foam.
+#
+# Why this matters and is not a tuned threshold: "innermost" is actively wrong once the pad
+# is in. A card flush against its wall has the whole band lying *inside* the card, so the
+# innermost step is artwork. That is the entire 67mm-vs-70mm error — see RFC-001 §"The foam
+# pad works". Unpadded scans still need "innermost" and can ask for it.
+#
+# The assumption "brightest" makes, stated so it can be tested: the card face is brighter
+# than whatever is behind the clearance gap. True for black foam and any card. NOT
+# necessarily true of a dark-bordered card against the *green wall* when the card is flush,
+# which is the untested case RFC-001 flags.
+STRATEGIES = ("brightest", "innermost")
+DEFAULT_STRATEGY = "brightest"
+
 # Half-width of the gradient-centroid window used to place the edge to subpixel. The card
 # edge transitions over 4-5px (scanner PSF plus the shadow the card's own 0.4mm thickness
 # casts). Widening this to 12 was measured and changes every dimension by under 45um while
@@ -201,13 +230,16 @@ def fit_card_edge(
     step_floor: float = STEP_FLOOR,
     sustain_mm: float = SUSTAIN_MM,
     anchor_offset_mm: float = 0.0,
+    strategy: str = DEFAULT_STRATEGY,
 ) -> EdgeFit:
-    """Fit one card edge by taking the innermost sustained step on every scanline.
+    """Fit one card edge by taking one sustained step per scanline. See STRATEGIES.
 
     `anchor_offset_mm` displaces the search anchor inward; it exists so tests can aim the
     detector wrongly on purpose and confirm the plausibility gates fire, which is the one
     failure this project has already paid for once.
     """
+    if strategy not in STRATEGIES:
+        raise ValueError(f"unknown edge strategy {strategy!r}; expected one of {STRATEGIES}")
     band_px = mm_to_px(band_mm, dpi)
     lead_px = mm_to_px(lead_mm, dpi)
     sustain_px = mm_to_px(sustain_mm, dpi)
@@ -238,16 +270,25 @@ def fit_card_edge(
 
         # Only steps with room for card behind them can be card edges.
         limit = min(search_limit, len(smooth) - int(sustain_px))
-        above = np.abs(r[:limit]) >= step_floor if limit > 0 else np.zeros(0, bool)
-        run = _innermost_run(above)
-        if run is None:
+        if limit <= 0:
             continue
-        a, b = run
-        # The step response is a plateau centred on the edge, not a spike at it: it stays
-        # elevated for several px on either side. Take the peak within the innermost run,
-        # never the run's last index — that lands ~7px inside the card and biased every
-        # measured dimension short by 200-500um.
-        d = a + int(np.argmax(np.abs(r[a : b + 1])))
+        if strategy == "brightest":
+            # Largest rise into the card. Signed, so the wall (a fall into the dark gap)
+            # and the artwork boundary (a fall into ink) cannot be picked at all.
+            d = int(np.argmax(r[:limit]))
+            if r[d] < step_floor:
+                continue
+        else:
+            above = np.abs(r[:limit]) >= step_floor
+            run = _innermost_run(above)
+            if run is None:
+                continue
+            a, b = run
+            # The step response is a plateau centred on the edge, not a spike at it: it
+            # stays elevated for several px on either side. Take the peak within the
+            # innermost run, never the run's last index — that lands ~7px inside the card
+            # and biased every measured dimension short by 200-500um.
+            d = a + int(np.argmax(np.abs(r[a : b + 1])))
 
         # The level after the step must hold — a transient is dust, not a card edge.
         after = smooth[d + 7 : d + 7 + int(sustain_px)]

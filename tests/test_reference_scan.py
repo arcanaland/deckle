@@ -12,6 +12,7 @@ Pots* 70.33 x 120.14mm.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
@@ -25,13 +26,28 @@ from deckle.units import px_to_mm
 
 REPO = Path(__file__).resolve().parent.parent
 REFERENCE = REPO / "20260801204347_001.jpg"
-SCANS = Path("/mnt/truenas/home/media/tarot/working/scans")
+# The scan library. Overridable so the suite can run against a local pull (see
+# tools/pull-scan.sh) on a machine without the NFS mount, rather than silently skipping
+# most of its coverage — every real assertion here needs a full-size scan.
+SCANS = Path(os.environ.get("DECKLE_SCANS", "/mnt/truenas/home/media/tarot/working/scans"))
 # The jigless negative control. NFS, read-only source material.
 CONTROL = SCANS / "pre-jig" / "20260801101236_001.jpg"
 # Both halves printed and butted, four cards, a different deck. Not part of TASK-002's
 # acceptance — it was scanned while this task was being written — but it is the only
 # evidence that the assembled jig and its seam work at all.
 ASSEMBLED = SCANS / "20260801222210_001.jpg"
+
+# Scans taken WITH the black foam pressure pad (2026-08-04). The pad is now mandatory
+# equipment — it is what closed card lift, RFC-001 §"The foam pad works" — so these are
+# what a scan looks like from here on, and they are the only ones that pass end to end.
+PADDED = SCANS / "20260804185115_001.jpg"
+PADDED_RESEATED = SCANS / "20260804191325_001.jpg"
+
+# Everything above predates the pad. Those scans have a shadow ramp in the clearance gap
+# instead of flat black, and so need the edge strategy written for it. This is not a
+# tolerance being loosened for old data: it is a different optical situation, and pinning
+# it here is what keeps the "innermost" path honest now that it is no longer the default.
+UNPADDED_STRATEGY = "innermost"
 
 CALIPERS = {0: (70.36, 120.32), 1: (70.33, 120.14)}
 
@@ -44,6 +60,10 @@ needs_control = pytest.mark.skipif(
 needs_assembled = pytest.mark.skipif(
     not ASSEMBLED.exists(), reason=f"assembled-jig scan not present at {ASSEMBLED}"
 )
+needs_padded = pytest.mark.skipif(
+    not (PADDED.exists() and PADDED_RESEATED.exists()),
+    reason=f"padded-jig scans not present at {PADDED} / {PADDED_RESEATED}",
+)
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +73,7 @@ def scan():
 
 @pytest.fixture(scope="module")
 def cards(scan):
-    return detect(scan, CardSpec(), expect=2)
+    return detect(scan, CardSpec(), expect=2, strategy=UNPADDED_STRATEGY)
 
 
 # --- Step 2: the jig's own geometry, before any card is touched ----------------------
@@ -174,7 +194,7 @@ def test_detection_is_independent_of_the_search_anchor(scan, cards):
     """
     base = {c.window.index: (c.width_mm, c.height_mm) for c in cards}
     for offset in (-0.25, -0.50):
-        moved = detect(scan, CardSpec(), anchor_offset_mm=offset)
+        moved = detect(scan, CardSpec(), anchor_offset_mm=offset, strategy=UNPADDED_STRATEGY)
         for c in moved:
             w, h = base[c.window.index]
             # 0.5um, i.e. a hundredth of a pixel: the only residual is the profile's
@@ -188,13 +208,13 @@ def test_detection_is_independent_of_the_search_anchor(scan, cards):
 def test_a_badly_aimed_detector_fails_loudly(scan, offset):
     """Aimed off the card, it must refuse — never return a plausible-looking crop."""
     with pytest.raises(DetectionError):
-        detect(scan, CardSpec(), anchor_offset_mm=offset)
+        detect(scan, CardSpec(), anchor_offset_mm=offset, strategy=UNPADDED_STRATEGY)
 
 
 @needs_reference
 def test_wrong_window_count_is_a_hard_failure(scan):
     with pytest.raises(DetectionError):
-        detect(scan, CardSpec(), expect=4)
+        detect(scan, CardSpec(), expect=4, strategy=UNPADDED_STRATEGY)
 
 
 # --- Step 5: the negative control ----------------------------------------------------
@@ -291,7 +311,7 @@ def test_assembled_jig_cards_measure_seventy_by_one_twenty():
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     spec = CardSpec()
     for w in find_windows(img):
-        c = detect_card(gray, w, spec)
+        c = detect_card(gray, w, spec, strategy=UNPADDED_STRATEGY)
         assert c.width_mm == pytest.approx(70.0, abs=0.10)
         # "the tower" (window 2) has an unresolved bottom edge; see the PR notes.
         if w.index != 2:
@@ -307,4 +327,79 @@ def test_assembled_jig_is_rejected_while_one_edge_is_unresolved():
     """
     img = cv2.imread(str(ASSEMBLED), cv2.IMREAD_COLOR)
     with pytest.raises(DetectionError):
-        detect(img, CardSpec(), expect=4)
+        detect(img, CardSpec(), expect=4, strategy=UNPADDED_STRATEGY)
+
+
+# --- The padded jig: the first configuration that detects end to end ------------------
+
+
+@needs_padded
+@pytest.mark.parametrize("path", [PADDED, PADDED_RESEATED], ids=["placed", "reseated"])
+def test_padded_scans_detect_all_four_cards(path):
+    """The acceptance test for both 2026-08-04 fixes, and the first green end-to-end run.
+
+    Before them this scan pair yielded two windows and zero cards. Asserting on `detect`
+    rather than `detect_card` is the point: every plausibility gate has to pass too.
+    """
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    cards = detect(img, CardSpec(), expect=4)
+    assert [(c.window.row, c.window.col) for c in cards] == [(0, 0), (0, 1), (1, 0), (1, 1)]
+    for c in cards:
+        assert c.width_mm == pytest.approx(70.24, abs=0.10)
+        assert c.height_mm == pytest.approx(120.28, abs=0.10)
+
+
+@needs_padded
+def test_a_card_flush_against_its_wall_is_still_measured():
+    """The 67mm bug, pinned. Regression cover for the whole reason `brightest` exists.
+
+    Cards slide to the left wall in every window of every padded scan so far — 0.0-0.25mm
+    of clearance against 2.3-2.6mm on the right. "innermost" then walks the band straight
+    into the artwork and reports the card 3mm narrow, with a fit that looks healthy. So the
+    assertion is not just that the width is right, but that a near-zero gap was *seen* as a
+    near-zero gap.
+    """
+    img = cv2.imread(str(PADDED), cv2.IMREAD_COLOR)
+    cards = detect(img, CardSpec(), expect=4)
+    flush = [c for c in cards if c.edges["left"].median_gap_mm < 0.30]
+    assert len(flush) == 4, "expected every card to sit against its left wall"
+    for c in flush:
+        assert c.edges["left"].median_gap_mm >= -0.05
+        assert c.edges["left"].median_step >= 100.0
+        assert c.width_mm > 70.0
+
+
+@needs_padded
+def test_innermost_would_get_the_flush_card_wrong():
+    """Records *why* the default changed, so it cannot be reverted by accident.
+
+    If this ever stops failing, the two strategies have converged and the choice is no
+    longer load-bearing — at which point delete the parameter rather than this test.
+    """
+    from deckle.detect import detect_card
+    from deckle.jig import find_windows
+
+    img = cv2.imread(str(PADDED), cv2.IMREAD_COLOR)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    w = find_windows(img)[0]
+    good = detect_card(gray, w, CardSpec(), strategy="brightest")
+    bad = detect_card(gray, w, CardSpec(), strategy=UNPADDED_STRATEGY)
+    assert good.width_mm == pytest.approx(70.26, abs=0.10)
+    assert bad.width_mm < 68.0, "the failure this fix removes has stopped reproducing"
+
+
+@needs_padded
+def test_seam_split_frame_still_finds_all_four_windows():
+    """The tape seam opens and the green mask stops being one component.
+
+    Measured on the reseated scan: 4.27M and 4.01M px, all four windows plainly in frame,
+    and the old largest-component rule returned two. Asserting on the mask directly so the
+    test states the condition it is covering rather than assuming it still holds.
+    """
+    from deckle.jig import green_mask
+
+    img = cv2.imread(str(PADDED_RESEATED), cv2.IMREAD_COLOR)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(green_mask(img), 8)
+    areas = sorted((int(a) for a in stats[1:, cv2.CC_STAT_AREA]), reverse=True)
+    assert areas[1] > 0.5 * areas[0], "this scan's frame is no longer split — pick another"
+    assert len(find_windows(img)) == 4

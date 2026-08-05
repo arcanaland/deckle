@@ -16,6 +16,7 @@ from pathlib import Path
 import cv2
 
 from .detect import CardSpec, DetectionError, detect
+from .edges import DEFAULT_STRATEGY, STRATEGIES
 from .rectify import master_size_px, rectify_all
 from .units import DEFAULT_DPI
 
@@ -44,6 +45,14 @@ def _common(p: argparse.ArgumentParser) -> None:
         "the right value for every deck)",
     )
     p.add_argument("--expect", type=int, default=None, help="require exactly this many windows")
+    p.add_argument(
+        "--edge-strategy",
+        choices=STRATEGIES,
+        default=DEFAULT_STRATEGY,
+        help="how to pick the card edge out of the candidate steps (default %(default)s; "
+        "use 'innermost' for scans taken WITHOUT the foam pad, where the frame's shadow "
+        "ramp outsteps the card edge)",
+    )
 
 
 def _report(cards, scan: Path) -> None:
@@ -83,7 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     img = _read(args.scan)
 
     try:
-        cards = detect(img, spec=_spec(args), dpi=args.dpi, expect=args.expect)
+        cards = detect(
+            img,
+            spec=_spec(args),
+            dpi=args.dpi,
+            expect=args.expect,
+            strategy=args.edge_strategy,
+        )
     except DetectionError as exc:
         print(f"deckle: {args.scan}: {exc}", file=sys.stderr)
         return 1
