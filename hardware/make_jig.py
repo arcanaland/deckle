@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+
+
 """Generate the deckle scanning jig as an STL.
 
 The jig is a flat frame that sits on the scanner glass and surrounds four
@@ -20,13 +22,13 @@ CARD_W, CARD_H = 70.0, 120.0
 
 CLEARANCE = 1.5
 
-THICKNESS = 3.0     # Rigid enough not to warp over 200mm; see notes at bottom.
+THICKNESS = 3.0
 MARGIN_X = 15.0     # Green border left and right of the outer windows.
 MARGIN_Y = 6.0      # Green border at the outer (non-seam) edge.
 WEB_X = 24.0        # Green between the two columns.
 SEAM_WEB = 7.0      # Green from window to the butt seam. Two halves -> 14mm.
 
-NOTCH_DEPTH = 8.0   # Finger access to lift a card out of its 3mm-deep well.
+NOTCH_DEPTH = 8.0   # Finger access to lift card
 NOTCH_WIDTH = 16.0
 
 
@@ -44,7 +46,7 @@ def build(card_w: float, card_h: float) -> tuple[list[tuple], float, float]:
     right_x0 = left_x1 + WEB_X
     right_x1 = right_x0 + win_w
 
-    # Finger notches face each other across the centre web, centred on the
+    # Finger notches face each other across the center web in the middle of the
     # windows' long edges. What remains between them is a bridge of
     # WEB_X - 2*NOTCH_DEPTH, so keep that positive.
     ny0 = y0 + (win_h - NOTCH_WIDTH) / 2
@@ -52,7 +54,7 @@ def build(card_w: float, card_h: float) -> tuple[list[tuple], float, float]:
     bridge = WEB_X - 2 * NOTCH_DEPTH
     if bridge <= 2.0:
         raise SystemExit(
-            f"centre web bridge would be {bridge:.1f}mm; widen WEB_X or "
+            f"center web bridge would be {bridge:.1f}mm; widen WEB_X or "
             f"shrink NOTCH_DEPTH")
 
     boxes = [
@@ -60,7 +62,7 @@ def build(card_w: float, card_h: float) -> tuple[list[tuple], float, float]:
         (0.0, y1, half_w, half_h),                  # seam bar
         (0.0, y0, left_x0, y1),                     # left margin
         (right_x1, y0, half_w, y1),                 # right margin
-        # Centre web, split into three so the two notches are left as voids.
+        # Center web, split into three so the two notches are left as voids.
         (left_x1, y0, right_x0, ny0),
         (left_x1, ny1, right_x0, y1),
         (left_x1 + NOTCH_DEPTH, ny0, right_x0 - NOTCH_DEPTH, ny1),
@@ -72,6 +74,8 @@ def box_triangles(x0, y0, x1, y1, z0=0.0, z1=THICKNESS):
     """12 triangles for an axis-aligned box, outward-facing."""
     v = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
          (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+
+    # I'mma keep it a buck, only Claude knows what these values mean
     faces = [
         (0, 2, 1), (0, 3, 2),   # bottom
         (4, 5, 6), (4, 6, 7),   # top
