@@ -1,4 +1,4 @@
-"""Unit tests for the line primitives. These need no scan and always run."""
+"""Unit tests for the line primitives"""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from deckle.geometry import corners_from_lines, fit_line_tls, fit_line_trimmed, 
 
 
 def _rect_lines(x0, y0, x1, y1, deg=0.0):
-    """The four edge lines of a rectangle, optionally rotated about its centre."""
+    """The four edge lines of a rectangle"""
     t = np.radians(deg)
     rot = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
-    centre = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+    center = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
     corners = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64)
-    corners = (corners - centre) @ rot.T + centre
+    corners = (corners - center) @ rot.T + center
     tl, tr, br, bl = corners
     return corners, {
         "top": fit_line_tls(np.array([tl, tr])),
@@ -25,7 +25,6 @@ def _rect_lines(x0, y0, x1, y1, deg=0.0):
 
 
 def test_fits_a_vertical_line():
-    """A y-on-x fit blows up here; a card edge really can be vertical."""
     pts = np.column_stack((np.full(50, 7.0), np.linspace(0, 100, 50)))
     line = fit_line_tls(pts)
     assert abs(abs(line.direction[1]) - 1.0) < 1e-9
@@ -63,23 +62,17 @@ def test_parallel_lines_have_no_intersection():
 
 
 def test_corners_come_back_wound_tl_tr_br_bl():
-    """The winding is a contract: `rectify` maps this quad onto the output in this order."""
     expected, lines = _rect_lines(10.0, 20.0, 110.0, 220.0)
     assert np.allclose(corners_from_lines(lines), expected)
 
 
 def test_corners_survive_the_skew_hand_placement_produces():
-    """RFC-001 measured up to 1.2deg of skew from placing cards by hand."""
     expected, lines = _rect_lines(10.0, 20.0, 110.0, 220.0, deg=1.2)
     assert np.allclose(corners_from_lines(lines), expected)
 
 
 def test_corners_are_the_intersection_not_an_observed_point():
-    """Lines fitted from stubs that stop well short of the corner still give the corner.
-
-    This is the whole reason the primitive exists -- a card's real corner is rounded and
-    there is nothing there to sample, so it is only ever recovered by intersecting.
-    """
+    """Lines fitted from stubs that stop short of the corner"""
     _, lines = _rect_lines(0.0, 0.0, 100.0, 200.0)
     stubs = {
         "top": fit_line_tls(np.array([[40.0, 0.0], [60.0, 0.0]])),
@@ -90,16 +83,14 @@ def test_corners_are_the_intersection_not_an_observed_point():
     assert np.allclose(corners_from_lines(stubs), corners_from_lines(lines))
 
 
-def test_a_degenerate_quad_raises_rather_than_returning_nonsense():
-    """A side edge fitted parallel to a top edge has no corner, and saying so beats
-    handing back an arbitrary point that later reads as a real measurement."""
+def test_a_degenerate_quad_raises():
     _, lines = _rect_lines(0.0, 0.0, 100.0, 200.0)
     lines = {**lines, "left": lines["top"]}
     with pytest.raises(ValueError):
         corners_from_lines(lines)
 
 
-def test_a_missing_edge_is_not_silently_tolerated():
+def test_a_missing_edge_is_not_tolerated():
     _, lines = _rect_lines(0.0, 0.0, 100.0, 200.0)
     with pytest.raises(KeyError):
         corners_from_lines({k: v for k, v in lines.items() if k != "bottom"})
