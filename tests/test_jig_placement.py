@@ -64,6 +64,14 @@ def test_jig_against_the_platen_edges_finds_four_windows(
     assert len(openings(jig_scan(origin_mm))) == 4
 
 
+def test_a_sliver_between_the_frame_and_the_corner_is_not_a_window() -> None:
+    """Pixel (0,0) is platen, but frame cuts it off from the rest of the outside."""
+    px = lambda v: mm_to_px_int(v, DPI)  # noqa: E731
+    img = jig_scan((1.0, 0.0))
+    img[px(50.0) : px(51.0), : px(1.0)] = FRAME_BGR  # debris bridging sliver to frame
+    assert len(openings(img)) == 4
+
+
 def test_placement_does_not_move_the_measured_opening() -> None:
     away = sorted(openings(jig_scan((8.0, 8.0))))
     corner = sorted(openings(jig_scan((0.0, 0.0))))
