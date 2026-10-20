@@ -5,7 +5,7 @@ import pytest
 
 @pytest.fixture
 def library_less_suite(pytester: pytest.Pytester, monkeypatch) -> pytest.Pytester:
-    """The real gate, in a two-test suite, with no scan library reachable."""
+    """The real gate with no scan library reachable."""
     monkeypatch.setenv("DECKLE_SCANS", "")
     pytester.copy_example("conftest.py")
     pytester.makeini("""

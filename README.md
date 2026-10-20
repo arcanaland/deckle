@@ -10,3 +10,9 @@ Decks are saved in Arcana Land's [Tarot Deck format](https://github.com/arcanala
 - A flatbed scanner.
 - Access to a 3D printer to create jigs that will hold cards in your scanner.
 - A slab of dark material to place on top of the cards while scanning, such as black polyurethane foam (Optional)
+
+## Technical Details
+
+Detecting a card in an image:
+- Send a bunch of scanlines across the image to find card edges
+- Fit a line through where we think a card edge is
