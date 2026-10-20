@@ -107,7 +107,7 @@ def test_a_displaced_anchor_still_reports_the_gap_from_the_wall():
 def test_brightest_refuses_an_empty_window():
     img = np.zeros((WALL_Y + 400, WIDTH), dtype=np.uint8)
     img[:WALL_Y] = WALL_LUMA
-    with pytest.raises(ValueError, match="no card edge here"):
+    with pytest.raises(ValueError, match="Card edge not found"):
         fit(img, EdgeStrategy.BRIGHTEST)
 
 

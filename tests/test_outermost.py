@@ -85,13 +85,13 @@ def test_bright_artwork_deeper_in_the_band_does_not_win():
 
 def test_a_flush_card_yields_nothing_rather_than_the_wall():
     """No void run, no edge, and no fallback to the wall line."""
-    with pytest.raises(ValueError, match="no card edge here"):
+    with pytest.raises(ValueError, match="Card edge not found"):
         fit(scene(0))
 
 
 def test_a_void_run_shorter_than_the_minimum_is_not_an_edge():
     short = int(mm_to_px(VOID_RUN_MM)) - 1
-    with pytest.raises(ValueError, match="no card edge here"):
+    with pytest.raises(ValueError, match="Card edge not found"):
         fit(scene(short))
 
 
@@ -105,7 +105,7 @@ def test_a_gap_above_the_ceiling_yields_nothing():
     """A gap that is dark but not void, as an unpadded or lighter-padded jig gives."""
     gap_px = int(mm_to_px(1.5))
     assert fit(scene(gap_px, void_luma=6.0)).yield_frac == 1.0
-    with pytest.raises(ValueError, match="no card edge here"):
+    with pytest.raises(ValueError, match="Card edge not found"):
         fit(scene(gap_px, void_luma=VOID_CEIL + 4.0))
 
 
@@ -134,7 +134,7 @@ def test_the_step_floor_still_applies():
     gap_px = int(mm_to_px(1.5))
     img = scene(gap_px, border_px=400, art_luma=6.0)
     img[WALL_Y + gap_px :, :] = 6  # "card" only 6 luma above the void: under the floor
-    with pytest.raises(ValueError, match="no card edge here"):
+    with pytest.raises(ValueError, match="Card edge not found"):
         fit(img)
 
 
