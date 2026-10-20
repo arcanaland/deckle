@@ -1,6 +1,6 @@
 # Deckle
 
-Command-line tool to scan tarot cards into a digital deck format used in Tarot Canvas.
+Command-line tool to scan tarot cards into a digital deck format used in [Tarot Canvas](https://github.com/arcanaland/tarot-canvas).
 
 Decks are saved in Arcana Land's [Tarot Deck format](https://github.com/arcanaland/specifications) v2.
 
