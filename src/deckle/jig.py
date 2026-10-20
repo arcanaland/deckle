@@ -80,9 +80,7 @@ def _frame_pieces(mask: np.ndarray, min_area_mm2: float, dpi: float) -> np.ndarr
     keep = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] * mm2_per_px >= min_area_mm2]
     if not keep:
         biggest = float(stats[1:, cv2.CC_STAT_AREA].max()) * mm2_per_px
-        raise JigError(
-            f"Missing jig: largest frame-colored region is only {biggest:.0f}mm^2"
-        )
+        raise JigError(f"Missing jig: largest frame-colored region is only {biggest:.0f}mm^2")
     return np.isin(labels, keep).astype(np.uint8) * 255
 
 
