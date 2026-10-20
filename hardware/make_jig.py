@@ -17,18 +17,17 @@ import struct
 
 # --- Parameters ------------------------------------------------------------
 # Card size
-# Re-measure and pass --card for a deck that differs.
 CARD_W, CARD_H = 70.0, 120.0
 
 CLEARANCE = 1.5
 
-THICKNESS = 3.0
-MARGIN_X = 15.0     # Green border left and right of the outer windows.
-MARGIN_Y = 6.0      # Green border at the outer (non-seam) edge.
-WEB_X = 24.0        # Green between the two columns.
-SEAM_WEB = 7.0      # Green from window to the butt seam. Two halves -> 14mm.
+THICKNESS = 3.0     # Rigid enough not to warp over 200mm
+MARGIN_X = 15.0     # border left and right of the outer windows.
+MARGIN_Y = 6.0      # border at the outer (non-seam) edge.
+WEB_X = 24.0        # between the two columns.
+SEAM_WEB = 7.0      # from window to the butt seam.
 
-NOTCH_DEPTH = 8.0   # Finger access to lift card
+NOTCH_DEPTH = 8.0   # Finger access
 NOTCH_WIDTH = 16.0
 
 
@@ -46,7 +45,7 @@ def build(card_w: float, card_h: float) -> tuple[list[tuple], float, float]:
     right_x0 = left_x1 + WEB_X
     right_x1 = right_x0 + win_w
 
-    # Finger notches face each other across the center web in the middle of the
+    # Finger notches face each other across the centre web, centerd on the
     # windows' long edges. What remains between them is a bridge of
     # WEB_X - 2*NOTCH_DEPTH, so keep that positive.
     ny0 = y0 + (win_h - NOTCH_WIDTH) / 2

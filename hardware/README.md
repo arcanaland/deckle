@@ -1,5 +1,7 @@
 # Scanning Jig
 
+![My personal green jigs on my scanner](./jig.jpeg)
+
 A flat frame that sits on the scanner glass and surrounds four cards in a 2×2 grid.
 
 ## Printing
