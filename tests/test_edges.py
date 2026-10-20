@@ -1,0 +1,118 @@
+"""The brightest and innermost edge strategies"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from deckle.edges import fit_card_edge
+from deckle.geometry import Line
+from deckle.units import EdgeStrategy, mm_to_px, px_to_mm
+
+WALL_Y = 40
+WIDTH = 240
+WALL_LUMA = 100
+CARD_LUMA = 240
+ART_LUMA = 200
+
+WALL = Line(point=np.array([0.0, float(WALL_Y)]), direction=np.array([1.0, 0.0]))
+SCANLINES = np.arange(20, WIDTH - 20)
+TOL_MM = px_to_mm(1.5)
+
+
+def fit(img, strategy, **kw):
+    return fit_card_edge(img, WALL, "top", SCANLINES, strategy=strategy, **kw)
+
+
+def padded(gap_px: int, border_px: int = int(mm_to_px(1.5))) -> np.ndarray:
+    """Wall, black gap, white border, then darker artwork inside the band."""
+    img = np.full((WALL_Y + gap_px + 400, WIDTH), ART_LUMA, dtype=np.uint8)
+    img[:WALL_Y] = WALL_LUMA
+    img[WALL_Y : WALL_Y + gap_px] = 0
+    img[WALL_Y + gap_px : WALL_Y + gap_px + border_px] = CARD_LUMA
+    return img
+
+
+def unpadded(ramp_px: int = 6, plateau_px: int = int(mm_to_px(1.5))) -> tuple[np.ndarray, int]:
+    """Wall, a steep shadow ramp, a lit plateau, then a small step up onto the card."""
+    gap_px = ramp_px + plateau_px
+    img = np.full((WALL_Y + gap_px + 400, WIDTH), 225, dtype=np.uint8)
+    img[:WALL_Y] = WALL_LUMA
+    img[WALL_Y : WALL_Y + ramp_px] = np.linspace(20, 200, ramp_px, dtype=np.uint8)[:, None]
+    img[WALL_Y + ramp_px : WALL_Y + gap_px] = 200
+    return img, gap_px
+
+
+@pytest.mark.parametrize("gap_mm", [0.3, 1.0, 2.5])
+def test_brightest_finds_the_rise_out_of_a_black_gap(gap_mm):
+    gap_px = int(mm_to_px(gap_mm))
+    got = fit(padded(gap_px), EdgeStrategy.BRIGHTEST)
+    assert got.yield_frac == 1.0
+    assert abs(got.median_gap_mm - px_to_mm(gap_px)) < TOL_MM
+
+
+def test_brightest_measures_a_flush_card():
+    """With no gap, the wall-to-card step is still a rise."""
+    got = fit(padded(0), EdgeStrategy.BRIGHTEST)
+    assert got.yield_frac == 1.0
+    assert abs(got.median_gap_mm) < TOL_MM
+
+
+def test_brightest_never_picks_a_fall():
+    """The wall and the artwork boundary are both falls, however large."""
+    gap_px = int(mm_to_px(1.0))
+    img = padded(gap_px)
+    img[:WALL_Y] = 255  # a wall brighter than the card: a -255 fall into the gap
+    got = fit(img, EdgeStrategy.BRIGHTEST)
+    assert abs(got.median_gap_mm - px_to_mm(gap_px)) < TOL_MM
+
+
+def test_innermost_picks_the_artwork_on_a_padded_jig():
+    """Why `brightest` is the default once the pad is in."""
+    gap_px = int(mm_to_px(1.0))
+    got = fit(padded(gap_px), EdgeStrategy.INNERMOST)
+    assert got.median_gap_mm > px_to_mm(gap_px) + 0.3
+
+
+def test_innermost_finds_the_card_past_the_shadow_ramp():
+    img, gap_px = unpadded()
+    got = fit(img, EdgeStrategy.INNERMOST)
+    assert got.yield_frac == 1.0
+    assert abs(got.median_gap_mm - px_to_mm(gap_px)) < TOL_MM
+
+
+def test_brightest_picks_the_shadow_ramp_on_an_unpadded_jig():
+    """Why `innermost` still exists."""
+    img, gap_px = unpadded()
+    got = fit(img, EdgeStrategy.BRIGHTEST)
+    assert got.median_gap_mm < px_to_mm(gap_px) - 0.5
+
+
+@pytest.mark.parametrize("strategy", [EdgeStrategy.BRIGHTEST, EdgeStrategy.INNERMOST])
+def test_dust_in_the_gap_is_not_a_card_edge(strategy):
+    gap_px = int(mm_to_px(2.0))
+    img = padded(gap_px, border_px=200)
+    speck = WALL_Y + int(mm_to_px(0.5))
+    img[speck : speck + 6] = 150
+    got = fit(img, strategy)
+    assert abs(got.median_gap_mm - px_to_mm(gap_px)) < TOL_MM
+
+
+def test_a_displaced_anchor_still_reports_the_gap_from_the_wall():
+    gap_px = int(mm_to_px(2.0))
+    got = fit(padded(gap_px), EdgeStrategy.BRIGHTEST, anchor_offset_mm=0.5)
+    assert abs(got.median_gap_mm - px_to_mm(gap_px)) < TOL_MM
+
+
+def test_brightest_refuses_an_empty_window():
+    img = np.zeros((WALL_Y + 400, WIDTH), dtype=np.uint8)
+    img[:WALL_Y] = WALL_LUMA
+    with pytest.raises(ValueError, match="no card edge here"):
+        fit(img, EdgeStrategy.BRIGHTEST)
+
+
+def test_innermost_reports_the_wall_in_an_empty_window():
+    """Unsigned, so the fall into the gap is a step. The caller's gap gate refuses it."""
+    img = np.zeros((WALL_Y + 400, WIDTH), dtype=np.uint8)
+    img[:WALL_Y] = WALL_LUMA
+    assert abs(fit(img, EdgeStrategy.INNERMOST).median_gap_mm) < TOL_MM

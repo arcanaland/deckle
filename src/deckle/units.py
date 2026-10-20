@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 MM_PER_INCH = 25.4
 DEFAULT_DPI = 600.0
 DEFAULT_CARD_MM = (70.0, 120.0)
 DEFAULT_ASPECT = 0.583
 
-STRATEGIES = ("brightest", "innermost")
-DEFAULT_STRATEGY = "brightest"
+
+class EdgeStrategy(StrEnum):
+    BRIGHTEST = "brightest"
+    INNERMOST = "innermost"
+    OUTERMOST = "outermost"
+
+
+DEFAULT_STRATEGY = EdgeStrategy.BRIGHTEST
 
 
 def mm_per_px(dpi: float = DEFAULT_DPI) -> float:
