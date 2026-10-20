@@ -1,6 +1,5 @@
 """Line fitting and linear algebra stuff."""
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping
