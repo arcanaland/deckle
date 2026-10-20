@@ -1,0 +1,9 @@
+pre-commit:
+  jobs:
+    - name: slop-guard
+      glob:
+        - "*.py"
+        - "*.sh"
+        - "*.just"
+        - "justfile"
+      run: ./scripts/slop-guard.sh {staged_files}
