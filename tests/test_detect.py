@@ -35,13 +35,14 @@ SHIFT = 4  # fractional bits for vertices on the supersampled grid
 
 @dataclass(frozen=True)
 class Placed:
-    """One card in its window: centre offset from the window centre, and rotation."""
+    """One card in its window."""
 
     dx_mm: float = 0.0
     dy_mm: float = 0.0
     angle_deg: float = 0.0
     size_mm: tuple[float, float] = CARD_MM
-    # Extra width on the bottom edge, to make a card that is not a rectangle.
+
+    # Extra width on the bottom edge (to make a card that is not a rectangle)
     bottom_extra_mm: float = 0.0
 
 

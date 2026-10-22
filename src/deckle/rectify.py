@@ -12,7 +12,6 @@ from .units import mm_to_px
 
 
 def master_size_px(card: Card) -> tuple[int, int]:
-    """Output size in px: the card's measured size at the scan's own resolution."""
     return (
         int(round(mm_to_px(card.width_mm, card.dpi))),
         int(round(mm_to_px(card.height_mm, card.dpi))),
@@ -36,20 +35,20 @@ def rectify_card(bgr: np.ndarray, card: Card) -> np.ndarray:
 
 
 def master_name(scan: Path, card: Card) -> str:
-    """`<scan-stem>_r<row>c<col>.png`.
-
-    Slot position only. Which card is which is decided later, by assignment.
-    """
     return f"{scan.stem}_r{card.window.row}c{card.window.col}.png"
 
 
 def rectify_all(bgr: np.ndarray, cards: list[Card], scan: Path, out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
+
     for card in cards:
         path = out_dir / master_name(scan, card)
         img = rectify_card(bgr, card)
+
         if not cv2.imwrite(str(path), img, [cv2.IMWRITE_PNG_COMPRESSION, 6]):
             raise OSError(f"failed to write {path}")
+
         written.append(path)
+
     return written

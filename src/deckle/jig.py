@@ -80,8 +80,8 @@ def _frame_pieces(mask: np.ndarray, min_area_mm2: float, dpi: float) -> np.ndarr
         biggest = float(stats[1:, cv2.CC_STAT_AREA].max()) * mm2_per_px
         raise JigError(f"Missing jig: largest frame-colored region is only {biggest:.0f}mm^2")
 
-    # A frame-colored region enclosed by the rest of the frame is artwork on a card, however
-    # large. Pieces of jig never enclose each other.
+    # if we see a frame-colored region somehow inside of a frame, it's probably
+    # coming from a card's artwork
     if len(keep) > 1:
         frame_pieces = []
         for i in keep:
@@ -89,6 +89,7 @@ def _frame_pieces(mask: np.ndarray, min_area_mm2: float, dpi: float) -> np.ndarr
             if not _holes(others)[labels == i].all():
                 frame_pieces.append(i)
         keep = frame_pieces
+
     return np.isin(labels, keep).astype(np.uint8) * 255
 
 

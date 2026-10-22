@@ -126,7 +126,7 @@ def edge_bands(window: Window, spec: CardSpec) -> dict[str, float]:
 
 
 def _scanlines(window: Window, edge: str, inset: float = 0.15) -> np.ndarray:
-    """Scanline coordinates across an edge, inset past the card's corner radius."""
+    """Scanline coordinates across an edge (inset past the card's corner radius)"""
     x, y, w, h = window.bbox
     lo, hi = (x, x + w) if edge in ("top", "bottom") else (y, y + h)
     span = hi - lo
