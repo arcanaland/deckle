@@ -1,4 +1,4 @@
-"""What a project holds against what its roster asks for."""
+"""Status of scanned vs staged."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from .project import Master, Project, ProjectError
 
 @dataclass(frozen=True)
 class Status:
-    """`total` is None when the roster is unavailable."""
-
     root: Path
     degraded_reason: str | None
     edge_strategy: str | None
@@ -25,7 +23,6 @@ class Status:
 
 
 def status(project: Project) -> Status:
-    """Never raises on a bad deckle.toml; a broken config is reported."""
     masters = project.masters()
 
     strategy: str | None = None
@@ -38,7 +35,6 @@ def status(project: Project) -> Status:
 
     backs = [m.ref for m in masters if m.is_back]
     fronts = [m for m in masters if not m.is_back]
-    # A variant is another artwork for a card, not another card.
     present_ids = {str(m.card) for m in fronts}
 
     if project.degraded:

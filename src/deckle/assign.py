@@ -1,8 +1,4 @@
-"""Move a staged master into masters/ under a canonical ID and record its provenance.
-
-The master lands before deckle.toml is saved: a master with no provenance row can be
-re-assigned, whereas a row with no master is a claim about a file that is not there.
-"""
+"""Assign a staged master to a canonical ID"""
 
 from __future__ import annotations
 
@@ -19,7 +15,7 @@ from .staging import provenance_for, read_staging_index, write_staging_index
 
 
 class AssignError(RuntimeError):
-    """An assignment that cannot be carried out."""
+    """A busted assignment."""
 
 
 @dataclass(frozen=True)
@@ -39,7 +35,6 @@ def _move(src: Path, dest: Path, *, rotate_180: bool) -> None:
         except OSError:  # different filesystem
             shutil.move(str(src), str(dest))
         return
-    # Lossless: a 180° rotation moves pixels without resampling them.
     img = cv2.imread(str(src), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise AssignError(f"cannot read {src}")
@@ -58,11 +53,7 @@ def assign(
     card_back: str | None = None,
     rotate_180: bool = False,
 ) -> Assignment:
-    """Assign one staged master to a card ID or a card back design.
-
-    Re-assigning rewrites the provenance row and removes the previous master, which
-    the masters/ walk would otherwise still count.
-    """
+    """Assign a staged master to a card ID"""
     if project.degraded:
         raise AssignError(
             f"cannot assign: {project.degraded_reason}. Fix or remove the state file first."
@@ -82,7 +73,6 @@ def assign(
         ref_out = ref  # type: ignore[assignment]
         dest = project.master_path(card, variant)
 
-    # Before anything is removed: moving a master onto itself would delete it.
     if source.resolve() == dest.resolve():
         raise AssignError(f"{source} is already the master for {ref_out}")
 

@@ -1,4 +1,4 @@
-"""The staging index: what rectify measured, kept until assign consumes it."""
+"""Staging index"""
 
 from __future__ import annotations
 
@@ -16,12 +16,11 @@ if TYPE_CHECKING:
 
 STAGING_INDEX = "index.toml"
 
-#: Measurements carried from the index into provenance when present.
 MEASURED_KEYS = ("width_mm", "height_mm", "aspect", "skew_deg", "edge_strategy", "dpi")
 
 
 def utc_now() -> str:
-    """An ISO-8601 UTC timestamp to the second."""
+    """An ISO-8601 UTC timestamp."""
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
@@ -56,12 +55,9 @@ def record_rectified(
     strategy: str,
     dpi: float,
 ) -> None:
-    """Index the masters rectify wrote into this project's staging/.
-
-    Masters written anywhere else, or into a degraded project, are not recorded.
-    """
     if project.degraded:
         return
+
     staging = project.staging_dir.resolve()
     rows = {
         path.name: {
@@ -77,30 +73,32 @@ def record_rectified(
         for path, card in zip(written, cards, strict=True)
         if path.parent.resolve() == staging
     }
+
     if not rows:
         return
+
     index = read_staging_index(project)
     index.update(rows)
     write_staging_index(project, index)
 
 
 def provenance_for(filename: str, index: dict[str, Any], *, rotate_180: bool) -> dict[str, Any]:
-    """A provenance row for a staged file.
-
-    Without an index row, the scan and slot are recovered from rectify's
-    `<scan-stem>_r<row>c<col>.png` naming and the measurements are omitted.
-    """
+    """A provenance row for a staged file."""
     row = dict(index.get(filename, {}))
     stem = filename[: -len(".png")] if filename.endswith(".png") else filename
     scan, _, slot = stem.rpartition("_")
     prov: dict[str, Any] = {}
     prov["source_scan"] = row.get("source_scan") or (f"{scan}.jpg" if scan else filename)
+
     if row.get("slot") or slot:
         prov["slot"] = row.get("slot") or slot
+
     for key in MEASURED_KEYS:
         if key in row:
             prov[key] = row[key]
+
     prov["rotate_180"] = rotate_180
     prov["deckle_version"] = build_id()
     prov["assigned_at"] = utc_now()
+
     return prov
