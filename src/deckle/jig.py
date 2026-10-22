@@ -208,7 +208,7 @@ def find_windows(
             }
             windows.append(
                 Window(
-                    index=ri * len(rows) + ci,
+                    index=len(windows),
                     row=ri,
                     col=ci,
                     mask=wmask,

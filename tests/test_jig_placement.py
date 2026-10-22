@@ -18,19 +18,21 @@ FRAME_BGR = (60, 160, 60)  # inside DEFAULT_FRAME_COLOR once converted to HSV
 PLATEN_BGR = (250, 250, 250)
 
 
-def jig_scan(origin_mm: tuple[float, float], frame_bgr=FRAME_BGR) -> np.ndarray:
-    """A 2x2 jig laid on the platen with its top-left corner at `origin_mm`."""
+def jig_scan(
+    origin_mm: tuple[float, float], frame_bgr=FRAME_BGR, rows: int = 2, cols: int = 2
+) -> np.ndarray:
+    """A rows x cols jig laid on the platen with its top-left corner at `origin_mm`."""
     px = lambda v: mm_to_px_int(v, DPI)  # noqa: E731
     img = np.full((px(BED_H_MM), px(BED_W_MM), 3), PLATEN_BGR, np.uint8)
 
     ox, oy = px(origin_mm[0]), px(origin_mm[1])
     img[oy : oy + px(FRAME_H_MM), ox : ox + px(FRAME_W_MM)] = frame_bgr
 
-    # Two columns and two rows of windows, spaced to leave a wall between them.
-    gap_x = (px(FRAME_W_MM) - 2 * px(WINDOW_W_MM)) // 3
-    gap_y = (px(FRAME_H_MM) - 2 * px(WINDOW_H_MM)) // 3
-    for r in range(2):
-        for c in range(2):
+    # Windows spaced evenly to leave a wall between them.
+    gap_x = (px(FRAME_W_MM) - cols * px(WINDOW_W_MM)) // (cols + 1)
+    gap_y = (px(FRAME_H_MM) - rows * px(WINDOW_H_MM)) // (rows + 1)
+    for r in range(rows):
+        for c in range(cols):
             x = ox + gap_x + c * (px(WINDOW_W_MM) + gap_x)
             y = oy + gap_y + r * (px(WINDOW_H_MM) + gap_y)
             img[y : y + px(WINDOW_H_MM), x : x + px(WINDOW_W_MM)] = PLATEN_BGR
@@ -70,6 +72,14 @@ def test_a_sliver_between_the_frame_and_the_corner_is_not_a_window() -> None:
     img = jig_scan((1.0, 0.0))
     img[px(50.0) : px(51.0), : px(1.0)] = FRAME_BGR  # debris bridging sliver to frame
     assert len(openings(img)) == 4
+
+
+@pytest.mark.parametrize("rows, cols", [(2, 2), (2, 1), (1, 2)])
+def test_windows_are_numbered_row_major_from_zero(rows: int, cols: int) -> None:
+    windows = find_windows(jig_scan((8.0, 8.0), rows=rows, cols=cols), CARD_MM, DPI)
+    assert [(w.index, w.row, w.col) for w in windows] == [
+        (r * cols + c, r, c) for r in range(rows) for c in range(cols)
+    ]
 
 
 def test_placement_does_not_move_the_measured_opening() -> None:
