@@ -10,7 +10,7 @@ The manifest says what deckle must make of each scan, so this file names none. I
     opposite_tol_mm = 0.15            # optional, CardSpec's default otherwise
     strategy = "brightest"
     dpi = 600.0                       # optional
-    expect = 4                        # optional window count
+    num_windows = 4                   # optional window count
     refuses = "regex"                 # either this, matched against the error...
 
     [[scan.card]]                     # ...or one table per slot, in slot order
@@ -84,7 +84,7 @@ def test_scan(scans: Path, entry: dict | None) -> None:
             img,
             _spec(entry),
             dpi=entry.get("dpi", 600.0),
-            expect=entry.get("expect"),
+            num_windows=entry.get("num_windows"),
             strategy=entry["strategy"],
         )
 

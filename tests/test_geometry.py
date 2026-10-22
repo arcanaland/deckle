@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from deckle.geometry import corners_from_lines, fit_line_tls, fit_line_trimmed, intersect
+from deckle.geometry import Quad, corners_from_lines, fit_line_tls, fit_line_trimmed, intersect
 
 
 def _rect_lines(x0, y0, x1, y1, deg=0.0):
@@ -14,13 +14,12 @@ def _rect_lines(x0, y0, x1, y1, deg=0.0):
     rot = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
     center = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
     corners = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64)
-    corners = (corners - center) @ rot.T + center
-    tl, tr, br, bl = corners
-    return corners, {
-        "top": fit_line_tls(np.array([tl, tr])),
-        "right": fit_line_tls(np.array([tr, br])),
-        "bottom": fit_line_tls(np.array([br, bl])),
-        "left": fit_line_tls(np.array([bl, tl])),
+    q = Quad(*((corners - center) @ rot.T + center))
+    return q, {
+        "top": fit_line_tls(np.array([q.top_left, q.top_right])),
+        "right": fit_line_tls(np.array([q.top_right, q.bottom_right])),
+        "bottom": fit_line_tls(np.array([q.bottom_right, q.bottom_left])),
+        "left": fit_line_tls(np.array([q.bottom_left, q.top_left])),
     }
 
 
@@ -94,3 +93,18 @@ def test_a_missing_edge_is_not_tolerated():
     _, lines = _rect_lines(0.0, 0.0, 100.0, 200.0)
     with pytest.raises(KeyError):
         corners_from_lines({k: v for k, v in lines.items() if k != "bottom"})
+
+
+def test_a_quad_is_an_array_clockwise_from_the_top_left():
+    q = Quad(*np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 9.0], [0.0, 9.0]]))
+    a = np.asarray(q, dtype=np.float32)
+    assert a.shape == (4, 2) and a.dtype == np.float32
+    assert np.array_equal(a, [[0, 0], [4, 0], [4, 9], [0, 9]])
+
+
+def test_a_quad_measures_its_sides():
+    q = Quad(*np.array([[0.0, 0.0], [4.0, 0.0], [5.0, 9.0], [0.0, 10.0]]))
+    assert (q.top, q.bottom) == (4.0, pytest.approx(np.hypot(5.0, 1.0)))
+    assert (q.left, q.right) == (10.0, pytest.approx(np.hypot(1.0, 9.0)))
+    assert q.width == pytest.approx(0.5 * (q.top + q.bottom))
+    assert q.height == pytest.approx(0.5 * (q.left + q.right))

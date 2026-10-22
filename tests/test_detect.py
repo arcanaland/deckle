@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from deckle.detect import CardSpec, DetectionError, detect
+from deckle.geometry import Quad
 from deckle.jig import DEFAULT_FRAME_COLOR
 from deckle.rectify import master_name, master_size_px, rectify_all, rectify_card
 from deckle.units import mm_to_px, px_to_mm
@@ -45,7 +46,7 @@ class Placed:
 
 
 def _poly(cx: float, cy: float, w: float, h: float, angle: float, bottom_extra: float = 0.0):
-    """TL, TR, BR, BL of a rotated quad, in pixels (pixel i spans [i, i+1))."""
+    """A rotated quad clockwise from the top-left, in pixels (pixel i spans [i, i+1))."""
     hw, hh, be = w / 2, h / 2, bottom_extra / 2
     local = np.array([[-hw, -hh], [hw, -hh], [hw + be, hh], [-hw - be, hh]])
     t = np.deg2rad(angle)
@@ -115,7 +116,7 @@ def two() -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def cards(two):
-    return run(two, expect=2)
+    return run(two, num_windows=2)
 
 
 # --- geometry -------------------------------------------------------------------------
@@ -172,7 +173,7 @@ def test_a_badly_aimed_detector_refuses(two, offset) -> None:
 
 def test_wrong_window_count_is_a_hard_failure(two) -> None:
     with pytest.raises(DetectionError, match="expected 4 windows, found 2"):
-        run(two, expect=4)
+        run(two, num_windows=4)
 
 
 def test_a_scan_with_no_jig_is_refused() -> None:
@@ -261,7 +262,9 @@ def test_master_edges_are_card_not_jig(two, cards) -> None:
 
 def test_a_landscape_card_is_refused_at_rectify(two, cards) -> None:
     """A master must be portrait. Turning the corners a quarter-turn makes one that is not."""
-    turned = replace(cards[0], corners=np.roll(cards[0].corners, 1, axis=0))
+    c = cards[0].corners
+    quarter_turn = Quad(c.bottom_left, c.top_left, c.top_right, c.bottom_right)
+    turned = replace(cards[0], corners=quarter_turn)
     assert turned.width_mm > turned.height_mm
     with pytest.raises(ValueError, match="not portrait"):
         rectify_card(two, turned)

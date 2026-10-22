@@ -1,6 +1,5 @@
 """Detect cards + geometry from an image"""
 
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,7 +8,7 @@ import cv2
 import numpy as np
 
 from .edges import STEP_FLOOR, EdgeFit, fit_card_edge
-from .geometry import corners_from_lines
+from .geometry import Quad, corners_from_lines
 from .jig import DEFAULT_FRAME_COLOR, EDGES, FrameColor, JigError, Window, find_windows
 from .units import (
     DEFAULT_ASPECT,
@@ -52,26 +51,26 @@ class CardSpec:
 @dataclass(frozen=True)
 class Card:
     window: Window
-    corners: np.ndarray  # (4,2) TL, TR, BR, BL in image coordinates
+    corners: Quad
     edges: dict[str, EdgeFit]
     dpi: float
     warnings: list[str] = field(default_factory=list)
 
     @property
     def top_w_mm(self) -> float:
-        return px_to_mm(float(np.linalg.norm(self.corners[1] - self.corners[0])), self.dpi)
+        return px_to_mm(self.corners.top, self.dpi)
 
     @property
     def bottom_w_mm(self) -> float:
-        return px_to_mm(float(np.linalg.norm(self.corners[2] - self.corners[3])), self.dpi)
+        return px_to_mm(self.corners.bottom, self.dpi)
 
     @property
     def left_h_mm(self) -> float:
-        return px_to_mm(float(np.linalg.norm(self.corners[3] - self.corners[0])), self.dpi)
+        return px_to_mm(self.corners.left, self.dpi)
 
     @property
     def right_h_mm(self) -> float:
-        return px_to_mm(float(np.linalg.norm(self.corners[2] - self.corners[1])), self.dpi)
+        return px_to_mm(self.corners.right, self.dpi)
 
     @property
     def width_mm(self) -> float:
@@ -101,7 +100,7 @@ class Card:
             "skew_deg": round(self.skew_deg, 4),
             "opposite_width_delta_mm": round(abs(self.top_w_mm - self.bottom_w_mm), 5),
             "opposite_height_delta_mm": round(abs(self.left_h_mm - self.right_h_mm), 5),
-            "corners_px": [[round(float(v), 3) for v in c] for c in self.corners],
+            "corners_px": [[round(float(v), 3) for v in c] for c in np.asarray(self.corners)],
             "window_opening_mm": [
                 round(self.window.opening_w_mm, 4),
                 round(self.window.opening_h_mm, 4),
@@ -120,7 +119,7 @@ class Card:
 
 
 def edge_bands(window: Window, spec: CardSpec) -> dict[str, float]:
-    """How deep to search for the card''' on each edge of this window."""
+    """How deep to search for the card on each edge of this window."""
     slack_w = max(0.0, window.opening_w_mm - spec.width_mm) + spec.gap_margin_mm
     slack_h = max(0.0, window.opening_h_mm - spec.height_mm) + spec.gap_margin_mm
     return {"top": slack_h, "bottom": slack_h, "left": slack_w, "right": slack_w}
@@ -230,7 +229,7 @@ def detect(
         raise DetectionError(str(exc)) from exc
 
     if num_windows is not None and len(windows) != num_windows:
-        raise DetectionError(f"num_windowsed {num_windows} windows, found {len(windows)}")
+        raise DetectionError(f"expected {num_windows} windows, found {len(windows)}")
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     cards, problems = [], []

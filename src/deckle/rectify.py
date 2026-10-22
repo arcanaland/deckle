@@ -25,7 +25,7 @@ def rectify_card(bgr: np.ndarray, card: Card) -> np.ndarray:
     if h <= w:
         raise ValueError(f"card {card.window.index} is not portrait ({w}x{h}px)")
 
-    src = card.corners.astype(np.float32)  # TL, TR, BR, BL
+    src = np.asarray(card.corners, dtype=np.float32)
     dst = np.array(
         [[0.0, 0.0], [w - 1.0, 0.0], [w - 1.0, h - 1.0], [0.0, h - 1.0]], dtype=np.float32
     )

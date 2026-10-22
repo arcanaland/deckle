@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .geometry import LineFit, corners_from_lines, fit_line_trimmed
+from .geometry import LineFit, Quad, corners_from_lines, fit_line_trimmed
 from .units import DEFAULT_DPI, mm_to_px, mm_to_px_int, px_to_mm
 
 NOTCH_OPEN_MM = 20.0
@@ -53,18 +53,16 @@ class Window:
     bbox: tuple[int, int, int, int]  # x, y, w, h (roughly)
     centroid: tuple[float, float]
     wall_lines: dict[str, LineFit]
-    corners: np.ndarray  # (4,2) TL, TR, BR, BL
+    corners: Quad
     dpi: float
 
     @property
     def opening_w_mm(self) -> float:
-        tl, tr, br, bl = self.corners
-        return px_to_mm(0.5 * (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)), self.dpi)
+        return px_to_mm(self.corners.width, self.dpi)
 
     @property
     def opening_h_mm(self) -> float:
-        tl, tr, br, bl = self.corners
-        return px_to_mm(0.5 * (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)), self.dpi)
+        return px_to_mm(self.corners.height, self.dpi)
 
 
 def frame_mask(bgr: np.ndarray, color: FrameColor = DEFAULT_FRAME_COLOR) -> np.ndarray:
