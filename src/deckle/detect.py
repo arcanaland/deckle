@@ -1,12 +1,5 @@
-"""Turn a jig scan into per-card geometry, or fail loudly.
+"""Detect cards + geometry from an image"""
 
-A wrong window count, or any card outside tolerance, is a hard error: never a guess, never
-a best-effort crop. A mis-detected card survives all the way into the emitted deck, and a
-person reviewing thumbnails cannot see that it is 0.4mm short.
-
-Fit residual is deliberately *not* a gate. A tight fit to the wrong feature has a small
-residual too, so it is reported as a diagnostic and nothing more.
-"""
 
 from __future__ import annotations
 
@@ -29,24 +22,26 @@ from .units import (
 
 
 class DetectionError(RuntimeError):
-    """Raised when a scan yields no trustworthy card geometry."""
+    """No card found."""
 
 
 @dataclass(frozen=True)
 class CardSpec:
-    """The card being packaged. Every gate is relative to these."""
+    """Card + physical metadata."""
 
     width_mm: float = DEFAULT_CARD_MM[0]
     height_mm: float = DEFAULT_CARD_MM[1]
     aspect: float = DEFAULT_ASPECT
     aspect_tol: float = 0.01
     size_tol_mm: float = 1.5
-    # How closely opposite edges must agree. A property of how the deck was cut.
+
+    # how closely opposite edges must agree (if it's not a perfect rectangle)
     opposite_tol_mm: float = 0.150
-    gap_min_mm: float = -0.10
-    # Added to a window's slack for the search band and the gap gate. Absorbs wall-fit
-    # error and trim variation; any more lets the detector find artwork.
+
+    # slack within a window
     gap_margin_mm: float = 0.70
+
+    gap_min_mm: float = -0.10
     min_yield: float = 0.80
 
     @property
@@ -92,7 +87,7 @@ class Card:
 
     @property
     def skew_deg(self) -> float:
-        """Rotation of the card's top edge from horizontal, in degrees."""
+        """Rotation of the card's top edge from horizontal in degrees."""
         return self.edges["top"].line.angle_deg()
 
     def to_dict(self) -> dict:
@@ -116,7 +111,6 @@ class Card:
                     "gap_mm": round(f.median_gap_mm, 4),
                     "step_luma": round(f.median_step, 2),
                     "scanline_yield": round(f.yield_frac, 3),
-                    # Diagnostic only, never a gate.
                     "residual_sd_mm": round(f.residual_sd_mm, 5),
                 }
                 for e, f in self.edges.items()
@@ -126,11 +120,7 @@ class Card:
 
 
 def edge_bands(window: Window, spec: CardSpec) -> dict[str, float]:
-    """How deep to search for the card on each edge of this window.
-
-    Derived from the window's measured opening: a card may sit against one wall, which
-    puts all of the window's slack on the opposite edge.
-    """
+    """How deep to search for the card''' on each edge of this window."""
     slack_w = max(0.0, window.opening_w_mm - spec.width_mm) + spec.gap_margin_mm
     slack_h = max(0.0, window.opening_h_mm - spec.height_mm) + spec.gap_margin_mm
     return {"top": slack_h, "bottom": slack_h, "left": slack_w, "right": slack_w}
@@ -145,7 +135,7 @@ def _scanlines(window: Window, edge: str, inset: float = 0.15) -> np.ndarray:
 
 
 def _check(card: Card, spec: CardSpec) -> list[str]:
-    """Plausibility gates. Returns the reasons the card is not believable."""
+    """Check if we found a card in a window"""
     bad = []
     bands = edge_bands(card.window, spec)
     for e, f in card.edges.items():
@@ -199,7 +189,7 @@ def detect_card(
     anchor_offset_mm: float = 0.0,
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
 ) -> Card:
-    """Fit the four edges of the card in one window. Raises if any edge is not found."""
+    """Find the four edges of a card in a window"""
     fits: dict[str, EdgeFit] = {}
     bands = edge_bands(window, spec)
     for e in EDGES:
@@ -225,24 +215,22 @@ def detect(
     bgr: np.ndarray,
     spec: CardSpec | None = None,
     dpi: float = DEFAULT_DPI,
-    expect: int | None = None,
+    num_windows: int | None = None,
     anchor_offset_mm: float = 0.0,
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
     color: FrameColor = DEFAULT_FRAME_COLOR,
 ) -> list[Card]:
-    """Detect every card in a jig scan.
-
-    `expect` hard-fails on any other window count. It defaults to None because the
-    number of windows is a property of the jig, not of the pipeline.
-    """
+    """Detect cards in a jig scan"""
     spec = spec or CardSpec()
+
+    # look for windows from the jig
     try:
         windows = find_windows(bgr, spec.card_mm, dpi=dpi, color=color)
     except JigError as exc:
         raise DetectionError(str(exc)) from exc
 
-    if expect is not None and len(windows) != expect:
-        raise DetectionError(f"expected {expect} windows, found {len(windows)}")
+    if num_windows is not None and len(windows) != num_windows:
+        raise DetectionError(f"num_windowsed {num_windows} windows, found {len(windows)}")
 
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     cards, problems = [], []
@@ -250,10 +238,15 @@ def detect(
         card = detect_card(
             gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm, strategy=strategy
         )
+
+        # is there a card in this window?
         bad = _check(card, spec)
         if bad:
             problems.extend(f"window {w.index}: {b}" for b in bad)
+
         cards.append(card)
+
     if problems:
         raise DetectionError("; ".join(problems))
+
     return cards

@@ -1,11 +1,4 @@
-"""Warp a detected card to a rectangular, losslessly-cropped master.
-
-One `warpPerspective` performs deskew, crop and scale together, so the source pixels are
-resampled exactly once rather than once per rotate, crop and resize.
-
-Masters are written at native scale as lossless PNG, with no colour conversion and no
-embedded profile: a master that has been through a transform cannot un-apply it later.
-"""
+"""Transform a wonky card into a rectangle"""
 
 from __future__ import annotations
 
@@ -27,10 +20,11 @@ def master_size_px(card: Card) -> tuple[int, int]:
 
 
 def rectify_card(bgr: np.ndarray, card: Card) -> np.ndarray:
-    """Deskew, crop and emit one card as an upright image."""
+    """deskew + crop"""
     w, h = master_size_px(card)
     if h <= w:
-        raise ValueError(f"card {card.window.index} is not portrait ({w}x{h}px) — refusing to emit")
+        raise ValueError(f"card {card.window.index} is not portrait ({w}x{h}px)")
+
     src = card.corners.astype(np.float32)  # TL, TR, BR, BL
     dst = np.array(
         [[0.0, 0.0], [w - 1.0, 0.0], [w - 1.0, h - 1.0], [0.0, h - 1.0]], dtype=np.float32
