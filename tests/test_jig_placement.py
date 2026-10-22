@@ -90,6 +90,29 @@ def test_placement_does_not_move_the_measured_opening() -> None:
         assert ah == pytest.approx(ch, abs=0.05)
 
 
+@pytest.mark.parametrize("seam", [False, True], ids=["whole", "split-at-seam"])
+def test_frame_colored_artwork_inside_a_window_is_not_frame(seam: bool) -> None:
+    """Artwork bigger than any piece-size floor still belongs to its window."""
+    px = lambda v: mm_to_px_int(v, DPI)  # noqa: E731
+    origin = 8.0
+    img = jig_scan((origin, origin))
+    if seam:
+        mid = px(origin + FRAME_W_MM / 2)
+        img[:, mid - px(0.5) : mid + px(0.5)] = PLATEN_BGR
+    # a blob most of a card in size, clear of the walls of the first window
+    gap_x = (px(FRAME_W_MM) - 2 * px(WINDOW_W_MM)) // 3
+    gap_y = (px(FRAME_H_MM) - 2 * px(WINDOW_H_MM)) // 3
+    x, y = px(origin) + gap_x + px(10.0), px(origin) + gap_y + px(7.0)
+    img[y : y + px(CARD_MM[1] - 10.0), x : x + px(CARD_MM[0] - 20.0)] = FRAME_BGR
+
+    windows = find_windows(img, CARD_MM, DPI)
+    assert [(w.row, w.col) for w in windows] == [(0, 0), (0, 1), (1, 0), (1, 1)]
+    clean = find_windows(jig_scan((origin, origin)), CARD_MM, DPI)
+    for got, want in zip(windows, clean, strict=True):
+        assert got.opening_w_mm == pytest.approx(want.opening_w_mm, abs=0.05)
+        assert got.opening_h_mm == pytest.approx(want.opening_h_mm, abs=0.05)
+
+
 def test_a_frame_with_no_holes_is_not_a_window() -> None:
     """The outside is never a window"""
     px = lambda v: mm_to_px_int(v, DPI)  # noqa: E731
