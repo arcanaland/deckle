@@ -114,7 +114,7 @@ def _cmd_rectify(args) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="deckle", description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(prog="deckle", description="Scan tarot cards into a deck")
     ap.add_argument("--version", action="version", version=f"deckle {build_id()}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
