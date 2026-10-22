@@ -1,0 +1,54 @@
+"""Transform a wonky card into a rectangle"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from .detect import Card
+from .units import mm_to_px
+
+
+def master_size_px(card: Card) -> tuple[int, int]:
+    return (
+        int(round(mm_to_px(card.width_mm, card.dpi))),
+        int(round(mm_to_px(card.height_mm, card.dpi))),
+    )
+
+
+def rectify_card(bgr: np.ndarray, card: Card) -> np.ndarray:
+    """deskew + crop"""
+    w, h = master_size_px(card)
+    if h <= w:
+        raise ValueError(f"card {card.window.index} is not portrait ({w}x{h}px)")
+
+    src = np.asarray(card.corners, dtype=np.float32)
+    dst = np.array(
+        [[0.0, 0.0], [w - 1.0, 0.0], [w - 1.0, h - 1.0], [0.0, h - 1.0]], dtype=np.float32
+    )
+    m = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(
+        bgr, m, (w, h), flags=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REPLICATE
+    )
+
+
+def master_name(scan: Path, card: Card) -> str:
+    return f"{scan.stem}_r{card.window.row}c{card.window.col}.png"
+
+
+def rectify_all(bgr: np.ndarray, cards: list[Card], scan: Path, out_dir: Path) -> list[Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+
+    for card in cards:
+        path = out_dir / master_name(scan, card)
+        img = rectify_card(bgr, card)
+
+        if not cv2.imwrite(str(path), img, [cv2.IMWRITE_PNG_COMPRESSION, 6]):
+            raise OSError(f"failed to write {path}")
+
+        written.append(path)
+
+    return written

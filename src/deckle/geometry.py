@@ -101,13 +101,53 @@ def intersect(a: Line, b: Line) -> np.ndarray:
     return a.point + t[0] * a.direction
 
 
-def corners_from_lines(lines: Mapping[str, Line]) -> np.ndarray:
+@dataclass(frozen=True, slots=True, eq=False)
+class Quad:
+    """Four corners in image coordinates, clockwise from the top-left."""
+
+    top_left: np.ndarray
+    top_right: np.ndarray
+    bottom_right: np.ndarray
+    bottom_left: np.ndarray
+
+    @property
+    def top(self) -> float:
+        """Length of the top side, in px."""
+        return float(np.linalg.norm(self.top_right - self.top_left))
+
+    @property
+    def bottom(self) -> float:
+        return float(np.linalg.norm(self.bottom_right - self.bottom_left))
+
+    @property
+    def left(self) -> float:
+        return float(np.linalg.norm(self.bottom_left - self.top_left))
+
+    @property
+    def right(self) -> float:
+        return float(np.linalg.norm(self.bottom_right - self.top_right))
+
+    @property
+    def width(self) -> float:
+        """Mean of the top and bottom sides, in px."""
+        return 0.5 * (self.top + self.bottom)
+
+    @property
+    def height(self) -> float:
+        """Mean of the left and right sides, in px."""
+        return 0.5 * (self.left + self.right)
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        """A (4, 2) array, clockwise from the top-left."""
+        corners = (self.top_left, self.top_right, self.bottom_right, self.bottom_left)
+        return np.array(corners, dtype=dtype)
+
+
+def corners_from_lines(lines: Mapping[str, Line]) -> Quad:
     """Find the 4 corners of 4 intersecting lines (like the edges of a tarot card)"""
-    return np.array(
-        [
-            intersect(lines["top"], lines["left"]),
-            intersect(lines["top"], lines["right"]),
-            intersect(lines["bottom"], lines["right"]),
-            intersect(lines["bottom"], lines["left"]),
-        ]
+    return Quad(
+        top_left=intersect(lines["top"], lines["left"]),
+        top_right=intersect(lines["top"], lines["right"]),
+        bottom_right=intersect(lines["bottom"], lines["right"]),
+        bottom_left=intersect(lines["bottom"], lines["left"]),
     )

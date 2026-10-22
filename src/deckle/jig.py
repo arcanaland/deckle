@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from .geometry import Line, LineFit, fit_line_trimmed, intersect
+from .geometry import LineFit, Quad, corners_from_lines, fit_line_trimmed
 from .units import DEFAULT_DPI, mm_to_px, mm_to_px_int, px_to_mm
 
 NOTCH_OPEN_MM = 20.0
@@ -53,18 +53,16 @@ class Window:
     bbox: tuple[int, int, int, int]  # x, y, w, h (roughly)
     centroid: tuple[float, float]
     wall_lines: dict[str, LineFit]
-    corners: np.ndarray  # (4,2) TL, TR, BR, BL
+    corners: Quad
     dpi: float
 
     @property
     def opening_w_mm(self) -> float:
-        tl, tr, br, bl = self.corners
-        return px_to_mm(0.5 * (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)), self.dpi)
+        return px_to_mm(self.corners.width, self.dpi)
 
     @property
     def opening_h_mm(self) -> float:
-        tl, tr, br, bl = self.corners
-        return px_to_mm(0.5 * (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)), self.dpi)
+        return px_to_mm(self.corners.height, self.dpi)
 
 
 def frame_mask(bgr: np.ndarray, color: FrameColor = DEFAULT_FRAME_COLOR) -> np.ndarray:
@@ -81,6 +79,17 @@ def _frame_pieces(mask: np.ndarray, min_area_mm2: float, dpi: float) -> np.ndarr
     if not keep:
         biggest = float(stats[1:, cv2.CC_STAT_AREA].max()) * mm2_per_px
         raise JigError(f"Missing jig: largest frame-colored region is only {biggest:.0f}mm^2")
+
+    # if we see a frame-colored region somehow inside of a frame, it's probably
+    # coming from a card's artwork
+    if len(keep) > 1:
+        frame_pieces = []
+        for i in keep:
+            others = np.isin(labels, [j for j in keep if j != i]).astype(np.uint8) * 255
+            if not _holes(others)[labels == i].all():
+                frame_pieces.append(i)
+        keep = frame_pieces
+
     return np.isin(labels, keep).astype(np.uint8) * 255
 
 
@@ -134,17 +143,6 @@ def _wall_boundary_points(
         raise JigError(f"window wall {edge!r} has too few boundary samples")
 
     return np.array(pts, dtype=np.float64)
-
-
-def _corners_from_walls(walls: dict[str, Line]) -> np.ndarray:
-    return np.array(
-        [
-            intersect(walls["top"], walls["left"]),
-            intersect(walls["top"], walls["right"]),
-            intersect(walls["bottom"], walls["right"]),
-            intersect(walls["bottom"], walls["left"]),
-        ]
-    )
 
 
 def find_windows(
@@ -215,7 +213,7 @@ def find_windows(
                     bbox=bbox,  # type: ignore[arg-type]
                     centroid=(float(centroids[i][0]), float(centroids[i][1])),
                     wall_lines=fits,
-                    corners=_corners_from_walls({e: f.line for e, f in fits.items()}),
+                    corners=corners_from_lines({e: f.line for e, f in fits.items()}),
                     dpi=dpi,
                 )
             )
