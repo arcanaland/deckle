@@ -54,8 +54,7 @@ def _common(p: argparse.ArgumentParser) -> None:
         "--opposite-tol",
         type=float,
         default=CardSpec.opposite_tol_mm,
-        help="how closely opposite edges of one card agree (default "
-        "%(default)s).",
+        help="how closely opposite edges of one card agree (default " "%(default)s).",
     )
     p.add_argument(
         "--edge-strategy",
