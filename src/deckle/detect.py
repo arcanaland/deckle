@@ -14,6 +14,7 @@ from .units import (
     DEFAULT_ASPECT,
     DEFAULT_CARD_MM,
     DEFAULT_DPI,
+    DEFAULT_OPPOSITE_TOL_MM,
     DEFAULT_STRATEGY,
     EdgeStrategy,
     px_to_mm,
@@ -35,7 +36,7 @@ class CardSpec:
     size_tol_mm: float = 1.5
 
     # how closely opposite edges must agree (if it's not a perfect rectangle)
-    opposite_tol_mm: float = 0.150
+    opposite_tol_mm: float = DEFAULT_OPPOSITE_TOL_MM
 
     # slack within a window
     gap_margin_mm: float = 0.70
