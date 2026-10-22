@@ -1,5 +1,3 @@
-"""`deckle detect` and `deckle rectify` end to end, on a synthetic scan written to disk."""
-
 from __future__ import annotations
 
 import json

@@ -1,11 +1,3 @@
-"""deckle's command line.
-
-`detect` and `rectify` share one detector and turn a scan into geometry or into masters.
-Both exit non-zero the moment anything is not believable: a silently mis-detected card is
-the one error that survives into an emitted deck, so there is no best-effort mode and no
---force.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -53,8 +45,7 @@ def _common(p: argparse.ArgumentParser) -> None:
         "--aspect",
         type=float,
         default=CardSpec.aspect,
-        help="expected width/height (default %(default)s; the deck spec's 0.5789 is NOT the "
-        "right value for every deck)",
+        help="expected width/height (default %(default)s)",
     )
     p.add_argument(
         "--num-windows", type=int, default=None, help="require exactly this many windows"
@@ -63,23 +54,19 @@ def _common(p: argparse.ArgumentParser) -> None:
         "--opposite-tol",
         type=float,
         default=CardSpec.opposite_tol_mm,
-        help="how closely opposite edges of one card must agree, in mm (default "
-        "%(default)s). A property of how the deck was cut.",
+        help="how closely opposite edges of one card agree (default "
+        "%(default)s).",
     )
     p.add_argument(
         "--edge-strategy",
         type=EdgeStrategy,
         choices=list(EdgeStrategy),
         default=DEFAULT_STRATEGY,
-        help="how to pick the card edge out of the candidate steps (default %(default)s; "
-        "'innermost' for scans taken without a dark pad over the cards, where the frame's "
-        "shadow outsteps the card edge, and 'outermost' for dark-bordered cards, where step "
-        "height stops distinguishing the card and the padded void does)",
+        help="how to find card edges  (default %(default)s;)",
     )
 
 
 def _detect(args) -> tuple[np.ndarray, list[Card]] | None:
-    """The scan and its cards, or None once the refusal has been printed."""
     img = _read(args.scan)
     w, h = args.card
     spec = CardSpec(width_mm=w, height_mm=h, aspect=args.aspect, opposite_tol_mm=args.opposite_tol)
@@ -116,11 +103,14 @@ def _cmd_detect(args) -> int:
 
 def _cmd_rectify(args) -> int:
     found = _detect(args)
+
     if found is None:
         return 1
+
     img, cards = found
     for p in rectify_all(img, cards, args.scan, args.out):
         print(p)
+
     return 0
 
 

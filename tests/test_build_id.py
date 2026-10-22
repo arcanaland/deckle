@@ -1,8 +1,3 @@
-"""`build_id()`: which deckle build is running.
-
-Every case below is a `direct_url.json` shape that `uv tool install` writes.
-"""
-
 from __future__ import annotations
 
 import json
@@ -15,7 +10,7 @@ from deckle import __version__, build_id
 
 @pytest.fixture(autouse=True)
 def _uncached():
-    """`build_id` is cached for the life of the process."""
+    """cached for the life of the process."""
     build_id.cache_clear()
     yield
     build_id.cache_clear()
@@ -53,7 +48,6 @@ def test_a_tag_install_names_the_tag_and_the_commit(monkeypatch):
 
 
 def test_the_commit_survives_the_branch_moving(monkeypatch):
-    """A branch install records the commit it resolved, not the branch's tip today."""
     _install(
         monkeypatch,
         json.dumps({"vcs_info": {"vcs": "git", "commit_id": "0387fd91a485a67bd1238945"}}),
@@ -61,8 +55,7 @@ def test_the_commit_survives_the_branch_moving(monkeypatch):
     assert build_id() == f"{__version__}+g0387fd9"
 
 
-def test_an_editable_install_says_so(monkeypatch):
-    """No commit describes an editable install; a bare version would imply a release."""
+def test_an_editable_install(monkeypatch):
     _install(monkeypatch, json.dumps({"url": "file:///x", "dir_info": {"editable": True}}))
     assert build_id() == f"{__version__}+editable"
 
@@ -82,6 +75,5 @@ def test_a_missing_distribution_falls_back(monkeypatch):
 
 
 def test_the_real_build_id_starts_with_the_package_version():
-    """Whatever this checkout is installed as, it is the version plus a local segment."""
     got = build_id()
     assert got == __version__ or got.startswith(f"{__version__}+")
