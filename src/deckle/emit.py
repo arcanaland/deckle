@@ -155,8 +155,6 @@ def _clean_links(links: Any) -> list[dict[str, Any]]:
 
 
 def _merge(computed: dict[str, Any], authored: dict[str, Any]) -> dict[str, Any]:
-    """Authored over computed. Tables merge key by key; anything else, arrays included, is
-    replaced whole."""
     out = dict(computed)
     for key, value in authored.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
@@ -176,11 +174,7 @@ def _with_safe_image(entry: Any, what: str) -> dict[str, Any]:
 
 
 def authored_tables(project: Project) -> tuple[dict[str, Any], str]:
-    """The authored metadata as deck.toml-shaped tables, and the file it came from.
-
-    deck.in.toml, where the project has one, is the only source. Otherwise [deck] and
-    [card_meta] are read from the project file.
-    """
+    """The authored metadata as deck.toml-shaped tables"""
     overlay = project.authored()
     if overlay is None:
         return {"deck": dict(project.deck), "cards": dict(project.card_meta)}, PROJECT_FILE
@@ -282,11 +276,7 @@ def _card_backs(
 
 
 def build_deck_doc(project: Project, masters: list[Master], warnings: list[str]) -> dict[str, Any]:
-    """Assemble deck.toml.
-
-    The authored tables contribute values and the masters contribute existence: anything
-    authored about a card that has no master is dropped with a warning.
-    """
+    """Assemble deck.toml."""
     authored, source = authored_tables(project)
     meta_table = "cards" if source == DECK_IN_FILE else "card_meta"
 

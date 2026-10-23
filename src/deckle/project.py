@@ -251,10 +251,7 @@ class Project:
         return self.doc.get("cards", {})
 
     def authored(self) -> dict[str, Any] | None:
-        """deck.in.toml, or None where the project has none.
-
-        It is written by hand and only ever read, so unlike deckle.toml it keeps its comments.
-        """
+        """deck.in.toml or None"""
         path = self.root / DECK_IN_FILE
         try:
             with path.open("rb") as fh:
@@ -355,9 +352,6 @@ def default_doc(*, deck_dir: str | None = None) -> dict[str, Any]:
 
 def default_deck_in(name: str) -> str:
     return (
-        "# What the deck is, shaped like the deck.toml that `deckle emit` writes. deckle reads\n"
-        "# this file and never rewrites it. Entries for cards without a master are dropped.\n"
-        "\n"
         "[deck]\n"
         f"name = {tomlout.format_string(name)}\n"
         'version = "0.1"\n'
