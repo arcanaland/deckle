@@ -1,4 +1,5 @@
 """Generate a deck directory from a project dir"""
+
 from __future__ import annotations
 
 import shutil
@@ -271,17 +272,13 @@ def _emit_names(project: Project, target: Path) -> None:
 
 def emit(project: Project, target: Path | None = None) -> EmitResult:
     if project.degraded:
-        raise EmitError(
-            f"cannot emit: {project.degraded_reason}."
-        )
+        raise EmitError(f"cannot emit: {project.degraded_reason}.")
     dest = (target or project.deck_dir()).expanduser()
     check_target(dest)
 
     masters = project.masters()
     if not masters:
-        raise EmitError(
-            f"nothing to emit: no masters in {project.masters_dir}"
-        )
+        raise EmitError(f"nothing to emit: no masters in {project.masters_dir}")
 
     warnings: list[str] = []
     doc = build_deck_doc(project, masters, warnings)
