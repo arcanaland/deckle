@@ -6,6 +6,7 @@ not a validator, and a test that needs a rule table to express itself belongs el
 
 from __future__ import annotations
 
+import datetime
 import shutil
 import tomllib
 import zlib
@@ -554,8 +555,74 @@ def test_an_authored_exclusion_of_a_scanned_card_is_dropped(tmp_path):
     assert any("major_arcana.03" in w for w in result.warnings)
 
 
-def test_an_unwritable_authored_value_is_an_emit_error(tmp_path):
-    project = make_authored_project(tmp_path, DECK + '[cards."major_arcana.03"]\nat = 07:32:00\n')
+def test_an_unwritable_value_is_an_emit_error(tmp_path):
+    project = make_project(tmp_path)
+    project.doc["card_meta"] = {"major_arcana.03": {"at": datetime.time(7, 32)}}
     write_master(project, "major_arcana/03.png")
     with pytest.raises(EmitError, match="cannot write deck.toml"):
         emit(project)
+
+
+AUTHORED = """\
+[deck]
+schema_version = "2.0"
+name = "Authored"   # as printed on the box
+version = "0.9"
+aspect_ratio = 0.6
+
+links = [
+    { rel = "homepage", url = "https://example.com/" },
+]
+
+[cards."major_arcana.03"]
+number = "III"
+
+# ---- ratings ----
+
+[cards."major_arcana.06"]
+content_rating = { "oars-1.1" = { sex_nudity = "mild" } }
+
+[card_backs.designs.default]
+reversible = true
+"""
+
+
+def authored_full(tmp_path):
+    project = make_authored_project(tmp_path, AUTHORED)
+    project.doc["project"]["aspect"] = 0.6
+    project.save()
+    return project
+
+
+def test_deck_toml_is_the_authored_file_when_emit_has_nothing_to_change(tmp_path):
+    project = authored_full(tmp_path)
+    for relpath in ("major_arcana/03.png", "major_arcana/06.png", "card_backs/default.png"):
+        write_master(project, relpath)
+    result = emit(project)
+    assert (result.target / "deck.toml").read_text(encoding="utf-8") == AUTHORED
+    assert not any(DECK_IN_FILE in w for w in result.warnings)
+
+
+def test_emit_edits_only_what_it_must(tmp_path):
+    project = authored_full(tmp_path)
+    write_master(project, "major_arcana/03.png")
+    write_master(project, "card_backs/default.png")
+    result = emit(project)
+
+    text = (result.target / "deck.toml").read_text(encoding="utf-8")
+    assert '"major_arcana.06"' not in text
+    assert "# as printed on the box" in text
+    assert '    { rel = "homepage", url = "https://example.com/" },\n' in text
+    assert any(
+        f"differs from {DECK_IN_FILE}" in w and "major_arcana.06" in w for w in result.warnings
+    )
+
+
+def test_a_computed_value_is_added_and_reported(tmp_path):
+    project = make_authored_project(tmp_path, "# mine\n" + DECK)
+    write_master(project, "major_arcana/03.png")
+    result = emit(project)
+    text = (result.target / "deck.toml").read_text(encoding="utf-8")
+    assert text.startswith("# mine\n[deck]\n")
+    assert tomllib.loads(text)["deck"]["aspect_ratio"] == project.config.aspect
+    assert any("+deck.aspect_ratio" in w for w in result.warnings)

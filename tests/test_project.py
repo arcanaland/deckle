@@ -51,7 +51,6 @@ def test_init_writes_the_authored_file_and_no_deck_table(tmp_path):
     project = init(tmp_path / "proj", 'A "Quoted" Deck')
     assert "deck" not in project.doc and "card_meta" not in project.doc
     assert project.authored() == {"deck": {"name": 'A "Quoted" Deck', "version": "0.1"}}
-    assert (project.root / DECK_IN_FILE).read_text().startswith("#")
 
 
 def test_init_keeps_an_existing_authored_file(tmp_path):

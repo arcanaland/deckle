@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import tomllib
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -10,6 +11,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 import cv2
+import tomlkit
+from tomlkit.exceptions import TOMLKitError
 
 from . import tomlout
 from .ids import is_custom_name
@@ -134,10 +137,9 @@ def _as_date_string(value: Any, what: str) -> str:
     return value
 
 
-def _clean_links(links: Any) -> list[dict[str, Any]]:
+def _check_links(links: Any) -> list[dict[str, Any]]:
     if not isinstance(links, list):
         raise EmitError("[deck].links must be an array of tables")
-    out = []
     for entry in links:
         if not isinstance(entry, dict):
             raise EmitError("each [deck].links entry must be a table")
@@ -147,11 +149,7 @@ def _clean_links(links: Any) -> list[dict[str, Any]]:
         parsed = urlparse(url or "")
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise EmitError(f"link url {url!r} must be absolute with an http(s) scheme")
-        clean = {"rel": rel, "url": url}
-        if entry.get("title"):
-            clean["title"] = entry["title"]
-        out.append(clean)
-    return out
+    return links
 
 
 def _merge(computed: dict[str, Any], authored: dict[str, Any]) -> dict[str, Any]:
@@ -219,7 +217,7 @@ def build_deck_table(src: dict[str, Any], *, aspect: float, source: Path) -> dic
         if key in src:
             src[key] = _as_date_string(src[key], key)
     if "links" in src:
-        src["links"] = _clean_links(src["links"])
+        src["links"] = _check_links(src["links"])
     for key in PATH_FIELDS:
         if key in src:
             src[key] = safe_relpath(str(src[key]), f"[deck].{key}")
@@ -344,6 +342,47 @@ def build_deck_doc(project: Project, masters: list[Master], warnings: list[str])
     return doc
 
 
+def _key_path(path: tuple[str, ...]) -> str:
+    return ".".join(tomlout.format_key(k) for k in path)
+
+
+def _reconcile(
+    node: Any, target: dict[str, Any], path: tuple[str, ...], changes: list[str]
+) -> None:
+    """Edit a parsed table in place."""
+    for key in [k for k in node if k not in target]:
+        del node[key]
+        changes.append(f"-{_key_path((*path, key))}")
+    for key, value in target.items():
+        if key not in node:
+            node[key] = value
+            changes.append(f"+{_key_path((*path, key))}")
+            continue
+        current = node[key]
+        plain = current.unwrap() if hasattr(current, "unwrap") else current
+        if plain == value:
+            continue
+        if isinstance(value, dict) and isinstance(plain, dict):
+            _reconcile(current, value, (*path, key), changes)
+        else:
+            node[key] = value
+            changes.append(f"~{_key_path((*path, key))}")
+
+
+def render_over(authored: str, doc: dict[str, Any], warnings: list[str]) -> str:
+    """The authored text edited only where doc differs from it."""
+    try:
+        parsed = tomlkit.parse(authored)
+    except TOMLKitError as exc:
+        raise EmitError(f"cannot parse {DECK_IN_FILE}: {exc}") from None
+    changes: list[str] = []
+    _reconcile(parsed, doc, (), changes)
+    text = tomlkit.dumps(parsed)
+    if tomllib.loads(text) != doc:
+        raise EmitError(f"editing {DECK_IN_FILE} into deck.toml did not produce the deck table")
+    return text
+
+
 # -- image emission -------------------------------------------------------------------
 
 
@@ -409,9 +448,10 @@ def emit(project: Project, target: Path | None = None) -> EmitResult:
 
     warnings: list[str] = []
     doc = build_deck_doc(project, masters, warnings)
+    authored = project.authored_text()
     try:
-        text = tomlout.dumps(doc)
-    except tomlout.TomlError as exc:
+        text = tomlout.dumps(doc) if authored is None else render_over(authored, doc, warnings)
+    except (tomlout.TomlError, TOMLKitError) as exc:
         raise EmitError(f"cannot write deck.toml: {exc}") from None
 
     dest.mkdir(parents=True, exist_ok=True)

@@ -250,18 +250,23 @@ class Project:
         """[cards."<id>"]"""
         return self.doc.get("cards", {})
 
-    def authored(self) -> dict[str, Any] | None:
+    def authored_text(self) -> str | None:
         """deck.in.toml or None"""
-        path = self.root / DECK_IN_FILE
         try:
-            with path.open("rb") as fh:
-                return tomllib.load(fh)
+            return (self.root / DECK_IN_FILE).read_text(encoding="utf-8")
         except FileNotFoundError:
             return None
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ProjectError(f"{DECK_IN_FILE} cannot be read: {exc}") from None
+
+    def authored(self) -> dict[str, Any] | None:
+        text = self.authored_text()
+        if text is None:
+            return None
+        try:
+            return tomllib.loads(text)
         except tomllib.TOMLDecodeError as exc:
             raise ProjectError(f"{DECK_IN_FILE} is not valid TOML: {exc}") from None
-        except OSError as exc:
-            raise ProjectError(f"{DECK_IN_FILE} cannot be read: {exc}") from None
 
     # -- paths -------------------------------------------------------------------
 
@@ -351,11 +356,7 @@ def default_doc(*, deck_dir: str | None = None) -> dict[str, Any]:
 
 
 def default_deck_in(name: str) -> str:
-    return (
-        "[deck]\n"
-        f"name = {tomlout.format_string(name)}\n"
-        'version = "0.1"\n'
-    )
+    return "[deck]\n" f"name = {tomlout.format_string(name)}\n" 'version = "0.1"\n'
 
 
 def init(root: Path, name: str, *, deck_dir: str | None = None) -> Project:
