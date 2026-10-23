@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .detect import Card
 from .rectify import master_size_px
+from .status import Status
 
 
 def report(cards: list[Card], scan: Path) -> None:
@@ -25,3 +26,34 @@ def report(cards: list[Card], scan: Path) -> None:
                 f"step {f.median_step:6.1f}   yield {100 * f.yield_frac:3.0f}%   "
                 f"residual {1000 * f.residual_sd_mm:5.1f} um (diagnostic only)"
             )
+
+
+def status_report(st: Status) -> None:
+    print(f"{st.root}")
+    if st.config_problem:
+        print(f"  {st.config_problem}")
+        print("    detect and rectify will refuse until this is fixed")
+    elif st.edge_strategy:
+        print(f"  edge strategy: {st.edge_strategy}")
+    if st.degraded_reason:
+        # every master is named by its card ID, so what is present survives a lost state file
+        print(f"  {st.degraded_reason} — roster and provenance unavailable, so no total")
+        print(f"  {len(st.present)} card(s) present:")
+        for m in st.present:
+            print(f"    {m.ref}")
+    else:
+        print(f"  {len(st.present)} of {st.total} roster cards present")
+        if st.missing:
+            print(f"  missing ({len(st.missing)}):")
+            for ref in st.missing:
+                print(f"    {ref}")
+        if st.unexpected:
+            print(f"  present but not in the roster ({len(st.unexpected)}) — the roster is wrong:")
+            for ref in st.unexpected:
+                print(f"    {ref}")
+    if st.backs:
+        print(f"  card backs ({len(st.backs)}): {', '.join(st.backs)}")
+    if st.strays:
+        print(f"  unrecognised files under masters/ ({len(st.strays)}):")
+        for p in st.strays:
+            print(f"    {p.relative_to(st.root)}")
