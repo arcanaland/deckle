@@ -6,6 +6,7 @@ import pytest
 
 from deckle.detect import CardSpec
 from deckle.project import (
+    DECK_IN_FILE,
     PROJECT_FILE,
     Config,
     Project,
@@ -46,6 +47,27 @@ def test_init_creates_the_layout(tmp_path):
     assert len(project.roster.cards()) == 78
 
 
+def test_init_writes_the_authored_file_and_no_deck_table(tmp_path):
+    project = init(tmp_path / "proj", 'A "Quoted" Deck')
+    assert "deck" not in project.doc and "card_meta" not in project.doc
+    assert project.authored() == {"deck": {"name": 'A "Quoted" Deck', "version": "0.1"}}
+    assert (project.root / DECK_IN_FILE).read_text().startswith("#")
+
+
+def test_init_keeps_an_existing_authored_file(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / DECK_IN_FILE).write_text('[deck]\nname = "Mine"\nversion = "2"\n', encoding="utf-8")
+    assert init(root, "Other").authored()["deck"]["name"] == "Mine"
+
+
+def test_an_unparseable_authored_file_is_an_error(tmp_path):
+    project = make_project(tmp_path)
+    (project.root / DECK_IN_FILE).write_text("[deck\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match=DECK_IN_FILE):
+        project.authored()
+
+
 def test_init_refuses_to_clobber(tmp_path):
     make_project(tmp_path)
     with pytest.raises(ProjectError):
@@ -54,19 +76,19 @@ def test_init_refuses_to_clobber(tmp_path):
 
 def test_unknown_keys_survive_a_round_trip(tmp_path):
     project = make_project(tmp_path)
-    project.doc["deck"]["some_future_key"] = "keep me"
+    project.doc["project"]["some_future_key"] = "keep me"
     project.doc["totally_unknown"] = {"a": 1}
     project.save()
 
     reloaded = Project.load(project.root)
-    assert reloaded.doc["deck"]["some_future_key"] == "keep me"
+    assert reloaded.doc["project"]["some_future_key"] == "keep me"
     assert reloaded.doc["totally_unknown"] == {"a": 1}
     assert list(reloaded.doc) == list(project.doc)
 
 
 def test_crash_mid_write_leaves_previous_state_intact(tmp_path, monkeypatch):
     project = make_project(tmp_path)
-    project.doc["deck"]["name"] = "Original"
+    project.doc["project"]["deck_dir"] = "original"
     project.save()
     before = (project.root / PROJECT_FILE).read_bytes()
 
@@ -74,12 +96,12 @@ def test_crash_mid_write_leaves_previous_state_intact(tmp_path, monkeypatch):
         raise OSError("crash before rename")
 
     monkeypatch.setattr("deckle.project.os.replace", boom)
-    project.doc["deck"]["name"] = "Half-written"
+    project.doc["project"]["deck_dir"] = "half-written"
     with pytest.raises(OSError):
         project.save()
 
     assert (project.root / PROJECT_FILE).read_bytes() == before
-    assert Project.load(project.root).deck["name"] == "Original"
+    assert Project.load(project.root).config.deck_dir == "original"
     assert not list(project.root.glob(f".{PROJECT_FILE}.*"))
 
 

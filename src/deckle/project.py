@@ -29,6 +29,7 @@ from .units import (
 )
 
 PROJECT_FILE = "deckle.toml"
+DECK_IN_FILE = "deck.in.toml"
 MASTERS_DIR = "masters"
 STAGING_DIR = "staging"
 DEBUG_DIR = "debug"
@@ -249,6 +250,22 @@ class Project:
         """[cards."<id>"]"""
         return self.doc.get("cards", {})
 
+    def authored(self) -> dict[str, Any] | None:
+        """deck.in.toml, or None where the project has none.
+
+        It is written by hand and only ever read, so unlike deckle.toml it keeps its comments.
+        """
+        path = self.root / DECK_IN_FILE
+        try:
+            with path.open("rb") as fh:
+                return tomllib.load(fh)
+        except FileNotFoundError:
+            return None
+        except tomllib.TOMLDecodeError as exc:
+            raise ProjectError(f"{DECK_IN_FILE} is not valid TOML: {exc}") from None
+        except OSError as exc:
+            raise ProjectError(f"{DECK_IN_FILE} cannot be read: {exc}") from None
+
     # -- paths -------------------------------------------------------------------
 
     @property
@@ -328,17 +345,23 @@ class Project:
         self.doc.get("cards", {}).pop(ref, None)
 
 
-def default_doc(name: str, *, deck_dir: str | None = None) -> dict[str, Any]:
+def default_doc(*, deck_dir: str | None = None) -> dict[str, Any]:
     return {
         "project": Config(deck_dir=deck_dir).to_doc(),
         "roster": Roster.canonical().to_doc(),
-        "deck": {
-            "name": name,
-            "version": "0.1",
-        },
-        "card_meta": {},
         "cards": {},
     }
+
+
+def default_deck_in(name: str) -> str:
+    return (
+        "# What the deck is, shaped like the deck.toml that `deckle emit` writes. deckle reads\n"
+        "# this file and never rewrites it. Entries for cards without a master are dropped.\n"
+        "\n"
+        "[deck]\n"
+        f"name = {tomlout.format_string(name)}\n"
+        'version = "0.1"\n'
+    )
 
 
 def init(root: Path, name: str, *, deck_dir: str | None = None) -> Project:
@@ -349,7 +372,11 @@ def init(root: Path, name: str, *, deck_dir: str | None = None) -> Project:
     for sub in (MASTERS_DIR, STAGING_DIR, NAMES_DIR):
         (root / sub).mkdir(parents=True, exist_ok=True)
 
-    project = Project(root, default_doc(name, deck_dir=deck_dir))
+    project = Project(root, default_doc(deck_dir=deck_dir))
     project.save()
+
+    deck_in = root / DECK_IN_FILE
+    if not deck_in.exists():
+        deck_in.write_text(default_deck_in(name), encoding="utf-8")
 
     return project
