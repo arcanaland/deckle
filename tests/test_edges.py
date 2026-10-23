@@ -24,9 +24,9 @@ def checked(a: EdgeAttempt) -> EdgeAttempt:
     """The trace's invariants, asserted on every edge search a test makes."""
     counts = a.counts()
     assert sum(counts.values()) == a.n_scanlines == len(a.trace)
-    hit = a.trace["reason"] == Reason.HIT.code
-    assert np.isfinite(a.trace["dist_px"][hit]).all()
-    assert np.isnan(a.trace["dist_px"][~hit]).all()
+    hit = a.trace.hit
+    assert np.isfinite(a.trace.dist_px[hit]).all()
+    assert np.isnan(a.trace.dist_px[~hit]).all()
     if a.fit is not None:
         assert counts[Reason.HIT] == len(a.fit.gap_mm) == len(a.fit.fit.inlier_mask)
     return a
@@ -173,7 +173,7 @@ def test_the_trace_records_where_each_hit_landed():
     gap_px = int(mm_to_px(1.0))
     got = attempt(padded(gap_px), EdgeStrategy.BRIGHTEST)
     assert got.counts()[Reason.HIT] == len(SCANLINES)
-    assert (got.trace["at"] == SCANLINES).all()
-    assert np.allclose(got.trace["anchor"], WALL_Y)
-    assert (got.trace["d"] >= 0).all()
-    assert np.allclose(got.trace["dist_px"], gap_px, atol=1.5)
+    assert (got.trace.at == SCANLINES).all()
+    assert np.allclose(got.trace.anchor, WALL_Y)
+    assert (got.trace.d >= 0).all()
+    assert np.allclose(got.trace.dist_px, gap_px, atol=1.5)

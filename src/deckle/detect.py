@@ -22,7 +22,7 @@ from .units import (
 
 
 class DetectionError(RuntimeError):
-    """Not every window held a card. `report` is None if detection never started."""
+    """Not card found."""
 
     def __init__(self, message: str, report: DetectionReport | None = None) -> None:
         super().__init__(message)
@@ -143,28 +143,27 @@ def _plural(n: int, word: str) -> str:
 
 
 def _scanline_yield(attempt: EdgeAttempt, spec: CardSpec) -> str:
-    """How many scanlines hit, and what the rest saw, most common first."""
+    """How many scanlines hit"""
     misses = sorted(
         ((r, n) for r, n in attempt.counts().items() if r is not Reason.HIT and n),
         key=lambda rn: -rn[1],
     )
+
     text = (
         f"{attempt.edge}: {attempt.n_hit} of {attempt.n_scanlines} scanlines hit "
         f"({100 * attempt.yield_frac:.0f}%, need {100 * spec.min_yield:.0f}%)"
     )
+
     if misses:
         text += " — " + ", ".join(f"{r} {n}" for r, n in misses)
+
     return text
 
 
 def _check(
     window: Window, attempts: dict[str, EdgeAttempt], card: Card | None, spec: CardSpec
 ) -> list[str]:
-    """Check if we found a card in a window.
-
-    Each edge's own gates run on every edge that fitted; the gates on the card's shape
-    run only when there is a card.
-    """
+    """Check if we found a card in a window."""
     bad = []
     bands = edge_bands(window, spec)
     for e, a in attempts.items():
@@ -172,18 +171,22 @@ def _check(
         if f is None:
             bad.append(_scanline_yield(a, spec))
             continue
+
         if not spec.gap_min_mm <= f.median_gap_mm <= bands[e]:
             bad.append(
                 f"{e} edge sits {f.median_gap_mm:.3f}mm from the wall, outside "
-                f"[{spec.gap_min_mm:.2f}, {bands[e]:.2f}]mm — that is not a clearance gap"
+                f"[{spec.gap_min_mm:.2f}, {bands[e]:.2f}]mm"
             )
+
         if f.median_step < STEP_FLOOR:
             bad.append(
                 f"{e} edge step is only {f.median_step:.1f} luma "
                 f"(need at least {STEP_FLOOR:.1f})"
             )
+
         if f.yield_frac < spec.min_yield:
             bad.append(_scanline_yield(a, spec))
+
     if card is None:
         return bad
 
@@ -194,39 +197,44 @@ def _check(
             f"top and bottom edges disagree on width by {1000 * dw:.0f}um "
             f"(limit {1000 * spec.opposite_tol_mm:.0f}um) — this is not a rectangle"
         )
+
     if dh > spec.opposite_tol_mm:
         bad.append(
             f"left and right edges disagree on height by {1000 * dh:.0f}um "
             f"(limit {1000 * spec.opposite_tol_mm:.0f}um) — this is not a rectangle"
         )
+
     if abs(card.aspect - spec.aspect) > spec.aspect_tol:
         bad.append(f"aspect {card.aspect:.4f} is outside {spec.aspect:.4f} +/- {spec.aspect_tol}")
+
     if abs(card.width_mm - spec.width_mm) > spec.size_tol_mm:
         bad.append(
             f"width {card.width_mm:.3f}mm is more than {spec.size_tol_mm}mm from the "
             f"configured {spec.width_mm}mm"
         )
+
     if abs(card.height_mm - spec.height_mm) > spec.size_tol_mm:
         bad.append(
             f"height {card.height_mm:.3f}mm is more than {spec.size_tol_mm}mm from the "
             f"configured {spec.height_mm}mm"
         )
+
     return bad
 
 
 @dataclass(frozen=True)
 class WindowResult:
-    """What one window's search found."""
+    """Result of searching for card in a window"""
 
     window: Window
     edges: dict[str, EdgeAttempt]
-    card: Card | None  # set only when all four edges fitted and met at four corners
+    card: Card | None
     problems: list[str]
 
 
 @dataclass(frozen=True)
 class DetectionReport:
-    """Everything one scan's detection measured, failures included."""
+    """Result of a detect."""
 
     windows: list[WindowResult]
     jig_error: str | None
@@ -245,7 +253,7 @@ class DetectionReport:
         return [w.card for w in self.windows if w.card is not None]
 
     def format(self) -> str:
-        """The problems as multi-line text: a summary, then one indented line each."""
+        """Human readable message of problems."""
         if self.jig_error is not None:
             return self.jig_error
         failed = sum(1 for w in self.windows if w.problems)
@@ -303,7 +311,7 @@ def detect_report(
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
     color: FrameColor = DEFAULT_FRAME_COLOR,
 ) -> DetectionReport:
-    """Measure every window in a jig scan. Detection failures are reported, not raised."""
+    """Measure all windows in a scan."""
     spec = spec or CardSpec()
     try:
         strategy = EdgeStrategy(strategy)
@@ -328,7 +336,7 @@ def detect_report(
     if num_windows is not None and len(windows) != num_windows:
         problems.append(f"expected {num_windows} windows, found {len(windows)}")
 
-    # measure every window found, even when the count is already wrong
+    # measure every window found
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     results = [
         detect_card(gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm, strategy=strategy)
@@ -349,7 +357,7 @@ def detect(
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
     color: FrameColor = DEFAULT_FRAME_COLOR,
 ) -> list[Card]:
-    """Detect cards in a jig scan. Raises DetectionError unless every window holds a card."""
+    """Detect cards in a jig scan."""
     report = detect_report(
         bgr,
         spec=spec,
@@ -359,6 +367,8 @@ def detect(
         strategy=strategy,
         color=color,
     )
+
     if report.problems:
         raise DetectionError(report.format(), report)
+
     return report.cards

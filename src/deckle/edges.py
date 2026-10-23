@@ -10,7 +10,7 @@ Scanlines march inward from the window wall using different strategies:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum
 
 import cv2
 import numpy as np
@@ -49,38 +49,38 @@ VOID_EDGE_SEARCH_PX = 4
 MIN_HITS = 16
 
 
-class Reason(StrEnum):
-    """What happened on one scanline."""
+class Reason(IntEnum):
+    """What happened for one scanline."""
 
-    HIT = "hit"
-    OFF_IMAGE = "off_image"
-    NO_ROOM = "no_room"
-    NO_VOID = "no_void"
-    WEAK_STEP = "weak_step"
-    NO_STEP = "no_step"
-    VOID_AFTER = "void_after"
-    NOT_FLAT = "not_flat"
+    HIT = 0
+    OFF_IMAGE = 1
+    NO_ROOM = 2
+    NO_VOID = 3
+    WEAK_STEP = 4
+    NO_STEP = 5
+    VOID_AFTER = 6
+    NOT_FLAT = 7
+
+    def __str__(self) -> str:
+        return self.name.lower()
+
+
+@dataclass(frozen=True)
+class Trace:
+    """Per-scanline record of one edge search, one element per scanline."""
+
+    at: np.ndarray  # int32, scanline coordinate
+    anchor: np.ndarray  # float32 px, where the search started
+    reason: np.ndarray  # uint8 Reason
+    d: np.ndarray  # int16, chosen step sample (-1 where none was chosen)
+    dist_px: np.ndarray  # float32, px inward from the anchor (NaN unless hit)
+
+    def __len__(self) -> int:
+        return len(self.at)
 
     @property
-    def code(self) -> int:
-        """The value stored in a trace's `reason` column."""
-        return _REASON_CODES[self]
-
-
-REASONS = tuple(Reason)
-_REASON_CODES = {r: i for i, r in enumerate(REASONS)}
-
-# One row per scanline. `d` is the profile sample chosen as the step (-1 if none was),
-# `dist_px` how far inward from the anchor the edge was placed (NaN unless a hit).
-TRACE_DTYPE = np.dtype(
-    [
-        ("at", np.int32),
-        ("anchor", np.float32),
-        ("reason", np.uint8),
-        ("d", np.int16),
-        ("dist_px", np.float32),
-    ]
-)
+    def hit(self) -> np.ndarray:
+        return self.reason == Reason.HIT
 
 
 @dataclass(frozen=True)
@@ -117,10 +117,8 @@ class EdgeFit:
 
 @dataclass(frozen=True)
 class EdgeAttempt:
-    """Everything one edge search saw, whether or not it found the edge."""
-
     edge: str
-    trace: np.ndarray  # TRACE_DTYPE, one row per scanline
+    trace: Trace
     n_scanlines: int
     band_mm: float
     lead_mm: float
@@ -131,7 +129,7 @@ class EdgeAttempt:
 
     @property
     def n_hit(self) -> int:
-        return int(np.count_nonzero(self.trace["reason"] == Reason.HIT.code))
+        return int(np.count_nonzero(self.trace.hit))
 
     @property
     def yield_frac(self) -> float:
@@ -139,8 +137,8 @@ class EdgeAttempt:
 
     def counts(self) -> dict[Reason, int]:
         """Scanlines per reason, every reason included."""
-        n = np.bincount(self.trace["reason"], minlength=len(REASONS))
-        return {r: int(n[r.code]) for r in REASONS}
+        n = np.bincount(self.trace.reason, minlength=len(Reason))
+        return {r: int(n[r]) for r in Reason}
 
 
 def _line_at(line: Line, coord: float, edge: str) -> float:
@@ -273,7 +271,7 @@ def fit_card_edge(
         # compute the luma of samples on this line
         got = _profile(gray, edge, int(at), anchor, n_samples, lead_px)
         if got is None:
-            reasons[i] = Reason.OFF_IMAGE.code
+            reasons[i] = Reason.OFF_IMAGE
             continue
 
         prof, d0 = got
@@ -284,34 +282,34 @@ def fit_card_edge(
 
         limit = min(search_limit, len(smooth) - int(sustain_px))
         if limit <= 0:
-            reasons[i] = Reason.NO_ROOM.code
+            reasons[i] = Reason.NO_ROOM
             continue
 
         if strategy is EdgeStrategy.BRIGHTEST:
             d = int(np.argmax(r[:limit]))
             if r[d] < step_floor:
-                reasons[i], chosen[i] = Reason.WEAK_STEP.code, d
+                reasons[i], chosen[i] = Reason.WEAK_STEP, d
                 continue
         elif strategy is EdgeStrategy.OUTERMOST:
             run = _innermost_run(prof[:limit] <= VOID_CEIL, void_run_px)
             if run is None:
-                reasons[i] = Reason.NO_VOID.code
+                reasons[i] = Reason.NO_VOID
                 continue
             _, b = run
             lo = max(0, b - VOID_EDGE_SEARCH_PX)
             hi = min(limit, b + VOID_EDGE_SEARCH_PX + 1)
             if hi - lo < 1:
-                reasons[i] = Reason.NO_ROOM.code
+                reasons[i] = Reason.NO_ROOM
                 continue
             d = lo + int(np.argmax(r[lo:hi]))
             if r[d] < step_floor:
-                reasons[i], chosen[i] = Reason.WEAK_STEP.code, d
+                reasons[i], chosen[i] = Reason.WEAK_STEP, d
                 continue
         else:  # innermost
             above = np.abs(r[:limit]) >= step_floor
             run = _innermost_run(above)
             if run is None:
-                reasons[i] = Reason.NO_STEP.code
+                reasons[i] = Reason.NO_STEP
                 continue
             a, b = run
             d = a + int(np.argmax(np.abs(r[a : b + 1])))
@@ -319,21 +317,21 @@ def fit_card_edge(
         chosen[i] = d
         after = smooth[d + 7 : d + 7 + int(sustain_px)]
         if after.size < 4:
-            reasons[i] = Reason.NO_ROOM.code
+            reasons[i] = Reason.NO_ROOM
             continue
         if strategy is EdgeStrategy.OUTERMOST:
             # dark-bordered card
             if after.min() <= VOID_CEIL:
-                reasons[i] = Reason.VOID_AFTER.code
+                reasons[i] = Reason.VOID_AFTER
                 continue
         elif np.std(after) > 12.0:
-            reasons[i] = Reason.NOT_FLAT.code
+            reasons[i] = Reason.NOT_FLAT
             continue
 
         # Detect on the smoothed profile, place on the raw one.
         sub = _subpixel(prof, d, half=REFINE_HALF)
         dist = d0 + sub  # px inward from the anchor
-        reasons[i], dists[i] = Reason.HIT.code, dist
+        reasons[i], dists[i] = Reason.HIT, dist
         if edge in ("top", "bottom"):
             pts.append((float(at), anchor + dist * dy))
         else:
@@ -341,12 +339,7 @@ def fit_card_edge(
         gaps.append(px_to_mm(dist + offset_px, dpi))
         steps.append(float(r[d]))
 
-    trace = np.empty(n, dtype=TRACE_DTYPE)
-    trace["at"] = scanlines
-    trace["anchor"] = anchors
-    trace["reason"] = reasons
-    trace["d"] = chosen
-    trace["dist_px"] = dists
+    trace = Trace(at=scanlines, anchor=anchors, reason=reasons, d=chosen, dist_px=dists)
 
     fit = None
     if len(pts) >= MIN_HITS:
