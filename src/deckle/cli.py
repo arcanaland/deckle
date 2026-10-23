@@ -9,10 +9,16 @@ import cv2
 import numpy as np
 
 from . import build_id
+from .assign import AssignError, assign
 from .detect import Card, CardSpec, DetectionError, detect
+from .emit import EmitError, emit
+from .ids import IdError
+from .project import Config, Project, ProjectError, find_project, init
 from .rectify import rectify_all
-from .render import report
-from .units import DEFAULT_DPI, DEFAULT_STRATEGY, EdgeStrategy
+from .render import report, status_report
+from .staging import record_rectified
+from .status import status
+from .units import EdgeStrategy
 
 
 def _read(path: Path):
@@ -30,22 +36,34 @@ def _card_size(text: str) -> tuple[float, float]:
     return w, h
 
 
-def _common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("scan", type=Path, help="scan of the jig with cards in it")
+def _project_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
-        "--dpi", type=float, default=DEFAULT_DPI, help="scan resolution (default %(default)s)"
+        "--project",
+        type=Path,
+        default=None,
+        help="project directory (default: the nearest one above the current directory)",
+    )
+
+
+def _common(p: argparse.ArgumentParser) -> None:
+    # Defaults are None so an explicit flag can be told apart from the project's setting.
+    defaults = Config()
+    p.add_argument("scan", type=Path, help="scan of the jig with cards in it")
+    _project_arg(p)
+    p.add_argument(
+        "--dpi", type=float, default=None, help=f"scan resolution (default {defaults.dpi:g})"
     )
     p.add_argument(
         "--card",
         type=_card_size,
-        default="{:g}x{:g}".format(*CardSpec().card_mm),
-        help="card size WxH in mm (default %(default)s)",
+        default=None,
+        help=f"card size WxH in mm (default {defaults.card_width_mm:g}x{defaults.card_height_mm:g})",
     )
     p.add_argument(
         "--aspect",
         type=float,
-        default=CardSpec.aspect,
-        help="expected width/height (default %(default)s)",
+        default=None,
+        help=f"expected width/height (default {defaults.aspect:g})",
     )
     p.add_argument(
         "--num-windows", type=int, default=None, help="require exactly this many windows"
@@ -53,29 +71,51 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--opposite-tol",
         type=float,
-        default=CardSpec.opposite_tol_mm,
-        help="how closely opposite edges of one card agree (default " "%(default)s).",
+        default=None,
+        help=f"how closely opposite edges of one card agree (default {defaults.opposite_tol_mm:g})",
     )
     p.add_argument(
         "--edge-strategy",
         type=EdgeStrategy,
         choices=list(EdgeStrategy),
-        default=DEFAULT_STRATEGY,
-        help="how to find card edges  (default %(default)s;)",
+        default=None,
+        help=f"how to find card edges (default {defaults.edge_strategy})",
     )
 
 
-def _detect(args) -> tuple[np.ndarray, list[Card]] | None:
+def _optional_project(args) -> Project | None:
+    """The project a detect/rectify run sits in. Outside one, flags and defaults only."""
+    if args.project is not None:
+        return Project.discover(args.project)
+    root = find_project()
+    return Project.load(root) if root else None
+
+
+def _settings(args, project: Project | None) -> tuple[CardSpec, float, EdgeStrategy]:
+    """Flags first, then [project], then the defaults."""
+    cfg = project.config if project and not project.degraded else Config()
+    w, h = args.card or (cfg.card_width_mm, cfg.card_height_mm)
+    spec = CardSpec(
+        width_mm=w,
+        height_mm=h,
+        aspect=cfg.aspect if args.aspect is None else args.aspect,
+        opposite_tol_mm=cfg.opposite_tol_mm if args.opposite_tol is None else args.opposite_tol,
+    )
+    dpi = cfg.dpi if args.dpi is None else args.dpi
+    return spec, dpi, args.edge_strategy or cfg.edge_strategy
+
+
+def _detect(
+    args, spec: CardSpec, dpi: float, strategy: EdgeStrategy
+) -> tuple[np.ndarray, list[Card]] | None:
     img = _read(args.scan)
-    w, h = args.card
-    spec = CardSpec(width_mm=w, height_mm=h, aspect=args.aspect, opposite_tol_mm=args.opposite_tol)
     try:
         cards = detect(
             img,
             spec=spec,
-            dpi=args.dpi,
+            dpi=dpi,
             num_windows=args.num_windows,
-            strategy=args.edge_strategy,
+            strategy=strategy,
         )
     except DetectionError as exc:
         print(f"deckle: {args.scan}: {exc}", file=sys.stderr)
@@ -84,13 +124,14 @@ def _detect(args) -> tuple[np.ndarray, list[Card]] | None:
 
 
 def _cmd_detect(args) -> int:
-    found = _detect(args)
+    spec, dpi, strategy = _settings(args, _optional_project(args))
+    found = _detect(args, spec, dpi, strategy)
     if found is None:
         return 1
     _, cards = found
     if args.json:
         json.dump(
-            {"scan": str(args.scan), "dpi": args.dpi, "cards": [c.to_dict() for c in cards]},
+            {"scan": str(args.scan), "dpi": dpi, "cards": [c.to_dict() for c in cards]},
             sys.stdout,
             indent=2,
         )
@@ -101,15 +142,69 @@ def _cmd_detect(args) -> int:
 
 
 def _cmd_rectify(args) -> int:
-    found = _detect(args)
+    project = _optional_project(args)
+    out = args.out
+    if out is None:
+        if project is None:
+            print("deckle: -o/--out is required outside a project", file=sys.stderr)
+            return 1
+        out = project.staging_dir
+
+    spec, dpi, strategy = _settings(args, project)
+    found = _detect(args, spec, dpi, strategy)
 
     if found is None:
         return 1
 
     img, cards = found
-    for p in rectify_all(img, cards, args.scan, args.out):
+    written = rectify_all(img, cards, args.scan, out)
+    if project is not None:
+        record_rectified(project, args.scan, cards, written, strategy=strategy, dpi=dpi)
+
+    for p in written:
         print(p)
 
+    return 0
+
+
+def _cmd_init(args) -> int:
+    root = args.directory
+    project = init(root, args.name or root.resolve().name, deck_dir=args.deck_dir)
+    print(f"initialised {project.root}")
+    print("  edit [deck] and [roster] in deckle.toml before emitting: the roster")
+    print("  starts at the canonical 78, which is a starting point, not a fact")
+    return 0
+
+
+def _cmd_status(args) -> int:
+    # incompleteness is the normal state of a project, so this exits 0 either way
+    status_report(status(Project.discover(args.project)))
+    return 0
+
+
+def _cmd_assign(args) -> int:
+    project = Project.discover(args.project)
+    ref = args.id
+    if ref and args.variant:
+        ref = f"{ref}:{args.variant}"
+    result = assign(project, args.file, ref, card_back=args.card_back, rotate_180=args.rotate_180)
+    note = " (rotated 180)" if result.rotated else ""
+    print(f"{result.ref} -> {result.dest.relative_to(project.root)}{note}")
+    if result.replaced:
+        print(f"  removed previous master {result.replaced.relative_to(project.root)}")
+    return 0
+
+
+def _cmd_emit(args) -> int:
+    result = emit(Project.discover(args.project), args.deck_dir)
+    for w in result.warnings:
+        print(f"deckle: warning: {w}", file=sys.stderr)
+    print(
+        f"{result.target}: {result.cards} card(s), {result.backs} back(s), "
+        f"{result.images} image(s)"
+    )
+    # said every time, so a gate that does not exist is never implied
+    print("  not validated: nothing checks this deck against the spec yet")
     return 0
 
 
@@ -125,14 +220,48 @@ def _parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("rectify", help="write one rectified master per card")
     _common(r)
-    r.add_argument("-o", "--out", type=Path, required=True, help="output directory")
+    r.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
+        help="output directory (default: the project's staging/)",
+    )
     r.set_defaults(func=_cmd_rectify)
+
+    i = sub.add_parser("init", help="create a project directory")
+    i.add_argument("directory", type=Path, nargs="?", default=Path("."), help="project root")
+    i.add_argument("--name", default=None, help="the deck's display name")
+    i.add_argument("--deck-dir", default=None, help="where `deckle emit` writes the deck")
+    i.set_defaults(func=_cmd_init)
+
+    s = sub.add_parser("status", help="what the project has, and what the roster still wants")
+    _project_arg(s)
+    s.set_defaults(func=_cmd_status)
+
+    a = sub.add_parser("assign", help="move a staged master into masters/ under a card ID")
+    a.add_argument("file", type=Path, help="the staged master to assign")
+    a.add_argument("id", nargs="?", default=None, help="card ID, e.g. minor_arcana.cups.king")
+    _project_arg(a)
+    a.add_argument("--variant", default=None, help="variant key, e.g. two_women")
+    a.add_argument("--card-back", default=None, help="assign as a card back design instead")
+    a.add_argument("--rotate-180", action="store_true", help="the card was placed upside down")
+    a.set_defaults(func=_cmd_assign)
+
+    e = sub.add_parser("emit", help="generate the deck directory from masters/")
+    _project_arg(e)
+    e.add_argument("--deck-dir", type=Path, default=None, help="override the emit target")
+    e.set_defaults(func=_cmd_emit)
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (ProjectError, AssignError, EmitError, IdError) as exc:
+        print(f"deckle: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover
