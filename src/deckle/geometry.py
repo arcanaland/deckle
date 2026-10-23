@@ -38,6 +38,7 @@ class LineFit:
     inliers: np.ndarray  # (M,2) points that survived trimming
     residual_sd_px: float
     n_input: int
+    inlier_mask: np.ndarray  # (n_input,) bool, which input points are the inliers
 
     @property
     def n_inliers(self) -> int:
@@ -61,6 +62,7 @@ def fit_line_trimmed(pts: np.ndarray, sigma: float = 2.5, iterations: int = 5) -
     """Fit the line but throw out outliers"""
     n_input = len(pts)
     keep = pts
+    kept = np.ones(n_input, dtype=bool)
     line = fit_line_tls(keep)
     for _ in range(iterations):
         d = line.distance(keep)
@@ -78,6 +80,7 @@ def fit_line_trimmed(pts: np.ndarray, sigma: float = 2.5, iterations: int = 5) -
             break
 
         keep = keep[mask]
+        kept[np.flatnonzero(kept)[~mask]] = False
         line = fit_line_tls(keep)
 
     return LineFit(
@@ -85,6 +88,7 @@ def fit_line_trimmed(pts: np.ndarray, sigma: float = 2.5, iterations: int = 5) -
         inliers=keep,
         residual_sd_px=float(np.std(line.distance(keep))),
         n_input=n_input,
+        inlier_mask=kept,
     )
 
 

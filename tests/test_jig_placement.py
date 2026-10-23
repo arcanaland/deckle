@@ -129,3 +129,37 @@ def test_a_jig_in_another_color_is_found_with_its_own_color() -> None:
 
     with pytest.raises(JigError, match="no frame-colored pixels"):
         find_windows(img, CARD_MM, DPI)
+
+
+def _crack_left_wall(img: np.ndarray, origin_mm: tuple[float, float], r: int, c: int) -> None:
+    """A hairline crack in the frame beside one window's left wall, joined to the window.
+
+    It belongs to the window's hole but is too thin to survive the opening, so the hole
+    and the opened window disagree about where that wall is on every scanline.
+    """
+    px = lambda v: mm_to_px_int(v, DPI)  # noqa: E731
+    gap_x = (px(FRAME_W_MM) - 2 * px(WINDOW_W_MM)) // 3
+    gap_y = (px(FRAME_H_MM) - 2 * px(WINDOW_H_MM)) // 3
+    x = px(origin_mm[0]) + gap_x + c * (px(WINDOW_W_MM) + gap_x)
+    y = px(origin_mm[1]) + gap_y + r * (px(WINDOW_H_MM) + gap_y)
+    crack = x - px(5.0)
+    img[y : y + px(WINDOW_H_MM), crack] = PLATEN_BGR
+    img[y, crack:x] = PLATEN_BGR
+
+
+def test_every_failing_wall_is_named_by_its_window() -> None:
+    origin = (8.0, 8.0)
+    img = jig_scan(origin)
+    _crack_left_wall(img, origin, 0, 1)
+    _crack_left_wall(img, origin, 1, 0)
+    with pytest.raises(JigError) as exc:
+        find_windows(img, CARD_MM, DPI)
+    assert exc.value.problems == [
+        "window 1 (r0c1) wall 'left': too few boundary samples",
+        "window 2 (r1c0) wall 'left': too few boundary samples",
+    ]
+    assert str(exc.value).splitlines() == [
+        "2 window walls not found",
+        "  window 1 (r0c1) wall 'left': too few boundary samples",
+        "  window 2 (r1c0) wall 'left': too few boundary samples",
+    ]

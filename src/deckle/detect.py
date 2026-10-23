@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .edges import STEP_FLOOR, EdgeFit, fit_card_edge
+from .edges import STEP_FLOOR, EdgeAttempt, EdgeFit, Reason, fit_card_edge
 from .geometry import Quad, corners_from_lines
 from .jig import DEFAULT_FRAME_COLOR, EDGES, FrameColor, JigError, Window, find_windows
 from .units import (
@@ -22,7 +22,11 @@ from .units import (
 
 
 class DetectionError(RuntimeError):
-    """No card found."""
+    """Not every window held a card. `report` is None if detection never started."""
+
+    def __init__(self, message: str, report: DetectionReport | None = None) -> None:
+        super().__init__(message)
+        self.report = report
 
 
 @dataclass(frozen=True)
@@ -134,11 +138,40 @@ def _scanlines(window: Window, edge: str, inset: float = 0.15) -> np.ndarray:
     return np.arange(int(lo + inset * span), int(hi - inset * span))
 
 
-def _check(card: Card, spec: CardSpec) -> list[str]:
-    """Check if we found a card in a window"""
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _scanline_yield(attempt: EdgeAttempt, spec: CardSpec) -> str:
+    """How many scanlines hit, and what the rest saw, most common first."""
+    misses = sorted(
+        ((r, n) for r, n in attempt.counts().items() if r is not Reason.HIT and n),
+        key=lambda rn: -rn[1],
+    )
+    text = (
+        f"{attempt.edge}: {attempt.n_hit} of {attempt.n_scanlines} scanlines hit "
+        f"({100 * attempt.yield_frac:.0f}%, need {100 * spec.min_yield:.0f}%)"
+    )
+    if misses:
+        text += " — " + ", ".join(f"{r} {n}" for r, n in misses)
+    return text
+
+
+def _check(
+    window: Window, attempts: dict[str, EdgeAttempt], card: Card | None, spec: CardSpec
+) -> list[str]:
+    """Check if we found a card in a window.
+
+    Each edge's own gates run on every edge that fitted; the gates on the card's shape
+    run only when there is a card.
+    """
     bad = []
-    bands = edge_bands(card.window, spec)
-    for e, f in card.edges.items():
+    bands = edge_bands(window, spec)
+    for e, a in attempts.items():
+        f = a.fit
+        if f is None:
+            bad.append(_scanline_yield(a, spec))
+            continue
         if not spec.gap_min_mm <= f.median_gap_mm <= bands[e]:
             bad.append(
                 f"{e} edge sits {f.median_gap_mm:.3f}mm from the wall, outside "
@@ -150,10 +183,10 @@ def _check(card: Card, spec: CardSpec) -> list[str]:
                 f"(need at least {STEP_FLOOR:.1f})"
             )
         if f.yield_frac < spec.min_yield:
-            bad.append(
-                f"{e} edge found a step on only {100 * f.yield_frac:.0f}% of scanlines "
-                f"(need {100 * spec.min_yield:.0f}%)"
-            )
+            bad.append(_scanline_yield(a, spec))
+    if card is None:
+        return bad
+
     dw = abs(card.top_w_mm - card.bottom_w_mm)
     dh = abs(card.left_h_mm - card.right_h_mm)
     if dw > spec.opposite_tol_mm:
@@ -181,6 +214,48 @@ def _check(card: Card, spec: CardSpec) -> list[str]:
     return bad
 
 
+@dataclass(frozen=True)
+class WindowResult:
+    """What one window's search found."""
+
+    window: Window
+    edges: dict[str, EdgeAttempt]
+    card: Card | None  # set only when all four edges fitted and met at four corners
+    problems: list[str]
+
+
+@dataclass(frozen=True)
+class DetectionReport:
+    """Everything one scan's detection measured, failures included."""
+
+    windows: list[WindowResult]
+    jig_error: str | None
+    problems: list[str]  # every problem in the scan, window-labelled
+
+    # the settings it ran with
+    spec: CardSpec
+    dpi: float
+    num_windows: int | None
+    anchor_offset_mm: float
+    strategy: EdgeStrategy
+    color: FrameColor
+
+    @property
+    def cards(self) -> list[Card]:
+        return [w.card for w in self.windows if w.card is not None]
+
+    def format(self) -> str:
+        """The problems as multi-line text: a summary, then one indented line each."""
+        if self.jig_error is not None:
+            return self.jig_error
+        failed = sum(1 for w in self.windows if w.problems)
+        head = (
+            f"{_plural(len(self.problems), 'problem')} in {failed} of "
+            f"{_plural(len(self.windows), 'window')}"
+        )
+        return "\n".join([head, *(f"  {p}" for p in self.problems)])
+
+
 def detect_card(
     gray: np.ndarray,
     window: Window,
@@ -188,27 +263,81 @@ def detect_card(
     dpi: float = DEFAULT_DPI,
     anchor_offset_mm: float = 0.0,
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
-) -> Card:
-    """Find the four edges of a card in a window"""
-    fits: dict[str, EdgeFit] = {}
+) -> WindowResult:
+    """Search all four edges of a window, then check what was found."""
     bands = edge_bands(window, spec)
-    for e in EDGES:
-        try:
-            fits[e] = fit_card_edge(
-                gray,
-                window.wall_lines[e].line,
-                e,
-                _scanlines(window, e),
-                dpi=dpi,
-                band_mm=bands[e],
-                anchor_offset_mm=anchor_offset_mm,
-                strategy=strategy,
-            )
-        except ValueError as exc:
-            raise DetectionError(f"window {window.index}: {exc}") from exc
+    attempts = {
+        e: fit_card_edge(
+            gray,
+            window.wall_lines[e].line,
+            e,
+            _scanlines(window, e),
+            dpi=dpi,
+            band_mm=bands[e],
+            anchor_offset_mm=anchor_offset_mm,
+            strategy=strategy,
+        )
+        for e in EDGES
+    }
 
-    corners = corners_from_lines({e: f.line for e, f in fits.items()})
-    return Card(window=window, corners=corners, edges=fits, dpi=dpi)
+    card, problems = None, []
+    fits = {e: a.fit for e, a in attempts.items() if a.fit is not None}
+    if len(fits) == len(EDGES):
+        try:
+            corners = corners_from_lines({e: f.line for e, f in fits.items()})
+        except ValueError as exc:
+            problems.append(f"the four edges do not meet at four corners: {exc}")
+        else:
+            card = Card(window=window, corners=corners, edges=fits, dpi=dpi)
+
+    problems = _check(window, attempts, card, spec) + problems
+    return WindowResult(window=window, edges=attempts, card=card, problems=problems)
+
+
+def detect_report(
+    bgr: np.ndarray,
+    spec: CardSpec | None = None,
+    dpi: float = DEFAULT_DPI,
+    num_windows: int | None = None,
+    anchor_offset_mm: float = 0.0,
+    strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
+    color: FrameColor = DEFAULT_FRAME_COLOR,
+) -> DetectionReport:
+    """Measure every window in a jig scan. Detection failures are reported, not raised."""
+    spec = spec or CardSpec()
+    try:
+        strategy = EdgeStrategy(strategy)
+    except ValueError as exc:
+        raise DetectionError(str(exc)) from exc
+    settings = dict(
+        spec=spec,
+        dpi=dpi,
+        num_windows=num_windows,
+        anchor_offset_mm=anchor_offset_mm,
+        strategy=strategy,
+        color=color,
+    )
+
+    # look for windows from the jig
+    try:
+        windows = find_windows(bgr, spec.card_mm, dpi=dpi, color=color)
+    except JigError as exc:
+        return DetectionReport(windows=[], jig_error=str(exc), problems=exc.problems, **settings)
+
+    problems = []
+    if num_windows is not None and len(windows) != num_windows:
+        problems.append(f"expected {num_windows} windows, found {len(windows)}")
+
+    # measure every window found, even when the count is already wrong
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    results = [
+        detect_card(gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm, strategy=strategy)
+        for w in windows
+    ]
+    for r in results:
+        problems.extend(f"{r.window.label}: {p}" for p in r.problems)
+
+    return DetectionReport(windows=results, jig_error=None, problems=problems, **settings)
 
 
 def detect(
@@ -220,33 +349,16 @@ def detect(
     strategy: EdgeStrategy | str = DEFAULT_STRATEGY,
     color: FrameColor = DEFAULT_FRAME_COLOR,
 ) -> list[Card]:
-    """Detect cards in a jig scan"""
-    spec = spec or CardSpec()
-
-    # look for windows from the jig
-    try:
-        windows = find_windows(bgr, spec.card_mm, dpi=dpi, color=color)
-    except JigError as exc:
-        raise DetectionError(str(exc)) from exc
-
-    if num_windows is not None and len(windows) != num_windows:
-        raise DetectionError(f"expected {num_windows} windows, found {len(windows)}")
-
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    cards, problems = [], []
-    for w in windows:
-        card = detect_card(
-            gray, w, spec, dpi=dpi, anchor_offset_mm=anchor_offset_mm, strategy=strategy
-        )
-
-        # is there a card in this window?
-        bad = _check(card, spec)
-        if bad:
-            problems.extend(f"window {w.index}: {b}" for b in bad)
-
-        cards.append(card)
-
-    if problems:
-        raise DetectionError("; ".join(problems))
-
-    return cards
+    """Detect cards in a jig scan. Raises DetectionError unless every window holds a card."""
+    report = detect_report(
+        bgr,
+        spec=spec,
+        dpi=dpi,
+        num_windows=num_windows,
+        anchor_offset_mm=anchor_offset_mm,
+        strategy=strategy,
+        color=color,
+    )
+    if report.problems:
+        raise DetectionError(report.format(), report)
+    return report.cards
