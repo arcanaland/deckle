@@ -253,3 +253,93 @@ def test_an_assign_refusal_exits_nonzero(tmp_path, capsys) -> None:
     assert main(argv) == 1
     assert capsys.readouterr().err.startswith("deckle: ")
     assert staged.is_file()
+
+
+# --- debug bundles ----------------------------------------------------------------------
+
+
+def test_a_failure_in_a_project_writes_a_bundle_and_ends_with_its_path(
+    empty_window, tmp_path, capsys
+) -> None:
+    project = make_project(tmp_path / "proj")
+    assert main(["detect", str(empty_window), "--project", str(project.root)]) == 1
+    err = capsys.readouterr().err.splitlines()
+    overview = project.debug_dir / empty_window.stem / "overview.jpg"
+    assert err[0] == f"deckle: {empty_window}: 4 problems in 1 of 2 windows"
+    assert err[-1] == f"deckle: debug overview: {overview}"
+    assert cv2.imread(str(overview)) is not None
+    assert (overview.parent / "trace.json").is_file()
+
+
+def test_a_success_in_a_project_writes_nothing(scan, tmp_path, capsys) -> None:
+    project = make_project(tmp_path / "proj")
+    assert main(["detect", str(scan), "--project", str(project.root)]) == 0
+    assert capsys.readouterr().err == ""
+    assert not project.debug_dir.exists()
+
+
+def test_a_success_does_not_touch_an_earlier_bundle(scan, tmp_path, capsys) -> None:
+    project = make_project(tmp_path / "proj")
+    old = project.debug_dir / scan.stem / "overview.jpg"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"from a failed run")
+    assert main(["detect", str(scan), "--project", str(project.root)]) == 0
+    assert old.read_bytes() == b"from a failed run"
+
+
+@pytest.mark.parametrize("extra", [[], ["--json"]], ids=["text", "json"])
+def test_debug_on_a_success_leaves_stdout_alone(scan, tmp_path, capsys, extra) -> None:
+    project = make_project(tmp_path / "proj")
+    argv = ["detect", str(scan), "--project", str(project.root), *extra]
+    assert main(argv) == 0
+    plain = capsys.readouterr()
+
+    assert main([*argv, "--debug"]) == 0
+    debugged = capsys.readouterr()
+    overview = project.debug_dir / scan.stem / "overview.jpg"
+    assert debugged.out == plain.out
+    assert debugged.err == f"deckle: debug overview: {overview}\n"
+    assert overview.is_file()
+
+
+def test_outside_a_project_nothing_is_written_without_the_flag(empty_window, tmp_path) -> None:
+    before = sorted(tmp_path.rglob("*"))
+    assert main(["detect", str(empty_window), *FLAGS]) == 1
+    assert sorted(tmp_path.rglob("*")) == before
+
+
+def test_debug_dir_works_outside_a_project_and_for_rectify(empty_window, tmp_path, capsys):
+    out = tmp_path / "dbg"
+    argv = ["rectify", str(empty_window), *FLAGS, "-o", str(tmp_path / "m"), "--debug", str(out)]
+    assert main(argv) == 1
+    assert (
+        capsys.readouterr()
+        .err.splitlines()[-1]
+        .endswith(str(out / empty_window.stem / "overview.jpg"))
+    )
+
+
+def test_a_bare_debug_outside_a_project_needs_a_directory(scan, capsys) -> None:
+    assert main(["detect", str(scan), *FLAGS, "--debug"]) == 1
+    assert "--debug needs a directory outside a project" in capsys.readouterr().err
+
+
+def test_a_broken_bundle_never_changes_the_verdict(
+    scan, empty_window, tmp_path, monkeypatch, capsys
+):
+    def boom(*_a, **_k):
+        raise RuntimeError("renderer bug")
+
+    monkeypatch.setattr("deckle.cli.write_bundle", boom)
+    project = make_project(tmp_path / "proj")
+    at = ["--project", str(project.root)]
+
+    assert main(["detect", str(empty_window), *at]) == 1
+    err = capsys.readouterr().err.splitlines()
+    assert err[0].startswith(f"deckle: {empty_window}: 4 problems")
+    assert err[-1] == "deckle: could not write the debug bundle: renderer bug"
+
+    assert main(["detect", str(scan), *at, "--debug", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert len(json.loads(captured.out)["cards"]) == 2
+    assert "renderer bug" in captured.err
