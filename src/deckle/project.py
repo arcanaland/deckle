@@ -31,6 +31,7 @@ from .units import (
 PROJECT_FILE = "deckle.toml"
 MASTERS_DIR = "masters"
 STAGING_DIR = "staging"
+DEBUG_DIR = "debug"
 NAMES_DIR = "names"
 CARD_BACKS_DIR = "card_backs"
 
@@ -257,6 +258,10 @@ class Project:
     @property
     def staging_dir(self) -> Path:
         return self.root / STAGING_DIR
+
+    @property
+    def debug_dir(self) -> Path:
+        return self.root / DEBUG_DIR
 
     @property
     def names_dir(self) -> Path:

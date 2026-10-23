@@ -10,7 +10,8 @@ import numpy as np
 
 from . import build_id
 from .assign import AssignError, assign
-from .detect import Card, CardSpec, DetectionError, detect
+from .debug import write_bundle
+from .detect import Card, CardSpec, DetectionError, detect_report
 from .emit import EmitError, emit
 from .ids import IdError
 from .project import Config, Project, ProjectError, find_project, init
@@ -43,6 +44,9 @@ def _project_arg(p: argparse.ArgumentParser) -> None:
         default=None,
         help="project directory (default: the nearest one above the current directory)",
     )
+
+
+_PROJECT_DEBUG = object()
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -81,6 +85,16 @@ def _common(p: argparse.ArgumentParser) -> None:
         default=None,
         help=f"how to find card edges (default {defaults.edge_strategy})",
     )
+    p.add_argument(
+        "--debug",
+        type=Path,
+        nargs="?",
+        const=_PROJECT_DEBUG,
+        default=None,
+        metavar="DIR",
+        help="create a debug image and stats"
+        "(default DIR: debug/)",
+    )
 
 
 def _optional_project(args) -> Project | None:
@@ -105,12 +119,20 @@ def _settings(args, project: Project | None) -> tuple[CardSpec, float, EdgeStrat
     return spec, dpi, args.edge_strategy or cfg.edge_strategy
 
 
+def _debug_root(args, project: Project | None) -> Path | None:
+    """Where to dump debug bundles."""
+    if args.debug is not None and args.debug is not _PROJECT_DEBUG:
+        return args.debug
+
+    return project.debug_dir if project is not None else None
+
+
 def _detect(
-    args, spec: CardSpec, dpi: float, strategy: EdgeStrategy
+    args, spec: CardSpec, dpi: float, strategy: EdgeStrategy, project: Project | None
 ) -> tuple[np.ndarray, list[Card]] | None:
     img = _read(args.scan)
     try:
-        cards = detect(
+        report = detect_report(
             img,
             spec=spec,
             dpi=dpi,
@@ -120,12 +142,37 @@ def _detect(
     except DetectionError as exc:
         print(f"deckle: {args.scan}: {exc}", file=sys.stderr)
         return None
-    return img, cards
+
+    failed = bool(report.problems)
+    root = _debug_root(args, project)
+    notes = []
+    if root is not None and (failed or args.debug is not None):
+        try:
+            notes.append(f"deckle: debug overview: {write_bundle(report, img, args.scan, root)}")
+        except Exception as exc:
+            notes.append(f"deckle: could not write the debug bundle: {exc}")
+
+    if failed:
+        print(f"deckle: {args.scan}: {report.format()}", file=sys.stderr)
+    for n in notes:
+        print(n, file=sys.stderr)
+
+    return None if failed else (img, report.cards)
+
+
+def _debug_needs_dir(args, project: Project | None) -> bool:
+    if args.debug is _PROJECT_DEBUG and project is None:
+        print("deckle: --debug needs a directory outside a project", file=sys.stderr)
+        return True
+    return False
 
 
 def _cmd_detect(args) -> int:
-    spec, dpi, strategy = _settings(args, _optional_project(args))
-    found = _detect(args, spec, dpi, strategy)
+    project = _optional_project(args)
+    if _debug_needs_dir(args, project):
+        return 1
+    spec, dpi, strategy = _settings(args, project)
+    found = _detect(args, spec, dpi, strategy, project)
     if found is None:
         return 1
     _, cards = found
@@ -143,6 +190,8 @@ def _cmd_detect(args) -> int:
 
 def _cmd_rectify(args) -> int:
     project = _optional_project(args)
+    if _debug_needs_dir(args, project):
+        return 1
     out = args.out
     if out is None:
         if project is None:
@@ -151,7 +200,7 @@ def _cmd_rectify(args) -> int:
         out = project.staging_dir
 
     spec, dpi, strategy = _settings(args, project)
-    found = _detect(args, spec, dpi, strategy)
+    found = _detect(args, spec, dpi, strategy, project)
 
     if found is None:
         return 1
