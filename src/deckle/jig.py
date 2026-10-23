@@ -17,8 +17,20 @@ MIN_AREA_CARDS = 0.5
 EDGES = ("top", "bottom", "left", "right")
 
 
+# fewest boundary samples that make a wall worth fitting a line to
+MIN_WALL_SAMPLES = 8
+
+
+def window_label(index: int, row: int, col: int) -> str:
+    return f"window {index} (r{row}c{col})"
+
+
 class JigError(RuntimeError):
     """Raised when the scan does not contain a usable jig."""
+
+    def __init__(self, message: str, problems: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.problems = problems or [message]
 
 
 @dataclass(frozen=True)
@@ -55,6 +67,10 @@ class Window:
     wall_lines: dict[str, LineFit]
     corners: Quad
     dpi: float
+
+    @property
+    def label(self) -> str:
+        return window_label(self.index, self.row, self.col)
 
     @property
     def opening_w_mm(self) -> float:
@@ -120,7 +136,7 @@ def _wall_boundary_points(
     dpi: float = DEFAULT_DPI,
     inset: float = 0.1,
 ) -> np.ndarray:
-    """Boundary points of one window wall sampled across its middle."""
+    """Boundary points of one window wall sampled across its middle. May be too few to fit."""
     x, y, w, h = bbox
     corridor = mm_to_px(corridor_mm, dpi)
 
@@ -139,10 +155,7 @@ def _wall_boundary_points(
             continue
         pts.append((at, b) if edge in ("top", "bottom") else (b, at))
 
-    if len(pts) < 8:
-        raise JigError(f"window wall {edge!r} has too few boundary samples")
-
-    return np.array(pts, dtype=np.float64)
+    return np.array(pts, dtype=np.float64).reshape(-1, 2)
 
 
 def find_windows(
@@ -188,10 +201,13 @@ def find_windows(
         r.sort(key=lambda i: centroids[i][0])
 
     windows: list[Window] = []
+    problems: list[str] = []
 
     # for each row and column of our jig
     for ri, r in enumerate(rows):
         for ci, i in enumerate(r):
+            index = sum(len(prev) for prev in rows[:ri]) + ci
+
             # which connected component
             opened_mask = (labels == i).astype(np.uint8) * 255
 
@@ -200,13 +216,21 @@ def find_windows(
             wmask = (hole_labels == hole_id).astype(np.uint8) * 255
 
             ## for each edge of the window, fit a line from samples we find across its edge
-            fits = {
-                e: fit_line_trimmed(_wall_boundary_points(wmask, opened_mask, bbox, e, dpi=dpi))
-                for e in EDGES
+            ## (every wall of every window is measured before any failure is raised)
+            samples = {
+                e: _wall_boundary_points(wmask, opened_mask, bbox, e, dpi=dpi) for e in EDGES
             }
+            short = [e for e in EDGES if len(samples[e]) < MIN_WALL_SAMPLES]
+            problems.extend(
+                f"{window_label(index, ri, ci)} wall {e!r}: too few boundary samples" for e in short
+            )
+            if short:
+                continue
+
+            fits = {e: fit_line_trimmed(samples[e]) for e in EDGES}
             windows.append(
                 Window(
-                    index=len(windows),
+                    index=index,
                     row=ri,
                     col=ci,
                     mask=wmask,
@@ -217,5 +241,10 @@ def find_windows(
                     dpi=dpi,
                 )
             )
+
+    if problems:
+        n = len(problems)
+        head = f"{n} window wall{'s' if n != 1 else ''} not found"
+        raise JigError("\n".join([head, *(f"  {p}" for p in problems)]), problems)
 
     return windows

@@ -9,7 +9,8 @@ import cv2
 import numpy as np
 import pytest
 
-from deckle.detect import CardSpec, DetectionError, detect
+from deckle.detect import CardSpec, DetectionError, detect, detect_report
+from deckle.edges import Reason
 from deckle.geometry import Quad
 from deckle.jig import DEFAULT_FRAME_COLOR
 from deckle.rectify import master_name, master_size_px, rectify_all, rectify_card
@@ -208,8 +209,67 @@ def test_a_card_of_the_wrong_aspect_is_refused(two) -> None:
 
 def test_every_failing_window_is_reported_at_once() -> None:
     img = jig_scene([[Placed(bottom_extra_mm=0.4), Placed(bottom_extra_mm=0.4)]])
-    with pytest.raises(DetectionError, match="window 0: .*window 1: "):
+    with pytest.raises(DetectionError, match="(?s)window 0 \\(r0c0\\): .*window 1 \\(r0c1\\): "):
         run(img)
+
+
+# --- collect, then fail ---------------------------------------------------------------
+
+
+def test_every_window_and_edge_is_measured_before_failing() -> None:
+    """Two broken windows of four: both reported, all sixteen edges searched."""
+    img = jig_scene([[Placed(), None], [Placed(bottom_extra_mm=0.4), Placed()]])
+    report = detect_report(img, SPEC, dpi=DPI)
+    assert [len(w.edges) for w in report.windows] == [4, 4, 4, 4]
+    assert [w.card is not None for w in report.windows] == [True, False, True, True]
+    assert [bool(w.problems) for w in report.windows] == [False, True, True, False]
+    assert len(report.cards) == 3
+
+    with pytest.raises(DetectionError) as exc:
+        run(img)
+    assert exc.value.report is not None
+    lines = str(exc.value).splitlines()
+    assert lines[0] == f"{len(lines) - 1} problems in 2 of 4 windows"
+    assert all(ln.startswith(("  window 1 (r0c1): ", "  window 2 (r1c0): ")) for ln in lines[1:])
+    assert any("not a rectangle" in ln for ln in lines)
+
+
+def test_an_edge_that_misses_reports_its_reason_counts() -> None:
+    report = detect_report(jig_scene([[None]]), SPEC, dpi=DPI)
+    (window,) = report.windows
+    left = window.edges["left"]
+    assert left.fit is None
+    counts = {r: n for r, n in left.counts().items() if n}
+    assert counts == {Reason.WEAK_STEP: left.n_scanlines}
+    assert (
+        f"  window 0 (r0c0): left: 0 of {left.n_scanlines} scanlines hit (0%, need 80%) — weak_step {left.n_scanlines}"
+        in report.format().splitlines()
+    )
+
+
+def test_a_short_count_is_listed_first_and_every_window_is_still_measured() -> None:
+    img = jig_scene([[Placed(), None, Placed()]])
+    with pytest.raises(DetectionError) as exc:
+        run(img, num_windows=4)
+    lines = str(exc.value).splitlines()
+    assert lines[1] == "  expected 4 windows, found 3"
+    assert lines[2].startswith("  window 1 (r0c1): ")
+    assert lines[0] == f"{len(lines) - 1} problems in 1 of 3 windows"
+    assert len(exc.value.report.windows) == 3
+
+
+def test_a_failed_jig_is_reported_with_no_windows() -> None:
+    img = np.full((600, 600, 3), PLATEN_BGR, np.uint8)
+    report = detect_report(img, SPEC, dpi=DPI)
+    assert report.windows == []
+    assert report.jig_error is not None and "no frame-colored pixels" in report.jig_error
+    assert report.problems == [report.jig_error]
+
+
+def test_success_returns_the_same_cards_as_the_report(two, cards) -> None:
+    report = detect_report(two, SPEC, dpi=DPI, num_windows=2)
+    assert report.problems == []
+    assert [c.corners.top for c in report.cards] == [c.corners.top for c in cards]
 
 
 # --- the gate that deliberately does not ----------------------------------------------

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from test_edges import checked, dominant
 
-from deckle.edges import BAND_MM, VOID_CEIL, VOID_RUN_MM, fit_card_edge
+from deckle.edges import BAND_MM, VOID_CEIL, VOID_RUN_MM, Reason, fit_card_edge
 from deckle.geometry import Line
 from deckle.units import EdgeStrategy, mm_to_px, px_to_mm
 
@@ -47,8 +48,21 @@ WALL = Line(point=np.array([0.0, float(WALL_Y)]), direction=np.array([1.0, 0.0])
 SCANLINES = np.arange(20, WIDTH - 20)
 
 
+def attempt(img, strategy=EdgeStrategy.OUTERMOST, **kw):
+    return checked(fit_card_edge(img, WALL, "top", SCANLINES, strategy=strategy, **kw))
+
+
 def fit(img, strategy=EdgeStrategy.OUTERMOST, **kw):
-    return fit_card_edge(img, WALL, "top", SCANLINES, strategy=strategy, **kw)
+    got = attempt(img, strategy, **kw).fit
+    assert got is not None
+    return got
+
+
+def refused(img, **kw) -> Reason:
+    """Search an edge that must not be found; return why most scanlines missed."""
+    got = attempt(img, **kw)
+    assert got.fit is None
+    return dominant(got)
 
 
 def test_strategies_parse_from_their_config_spelling():
@@ -85,14 +99,12 @@ def test_bright_artwork_deeper_in_the_band_does_not_win():
 
 def test_a_flush_card_yields_nothing_rather_than_the_wall():
     """No void run, no edge, and no fallback to the wall line."""
-    with pytest.raises(ValueError, match="Card edge not found"):
-        fit(scene(0))
+    assert refused(scene(0)) is Reason.NO_VOID
 
 
 def test_a_void_run_shorter_than_the_minimum_is_not_an_edge():
     short = int(mm_to_px(VOID_RUN_MM)) - 1
-    with pytest.raises(ValueError, match="Card edge not found"):
-        fit(scene(short))
+    assert refused(scene(short)) is Reason.NO_VOID
 
 
 def test_a_run_at_the_minimum_is_an_edge():
@@ -105,8 +117,7 @@ def test_a_gap_above_the_ceiling_yields_nothing():
     """A gap that is dark but not void, as an unpadded or lighter-padded jig gives."""
     gap_px = int(mm_to_px(1.5))
     assert fit(scene(gap_px, void_luma=6.0)).yield_frac == 1.0
-    with pytest.raises(ValueError, match="Card edge not found"):
-        fit(scene(gap_px, void_luma=VOID_CEIL + 4.0))
+    assert refused(scene(gap_px, void_luma=VOID_CEIL + 4.0)) is Reason.NO_VOID
 
 
 def test_a_speck_of_dust_in_the_gap_is_not_a_card_edge():
@@ -134,8 +145,14 @@ def test_the_step_floor_still_applies():
     gap_px = int(mm_to_px(1.5))
     img = scene(gap_px, border_px=400, art_luma=6.0)
     img[WALL_Y + gap_px :, :] = 6  # "card" only 6 luma above the void: under the floor
-    with pytest.raises(ValueError, match="Card edge not found"):
-        fit(img)
+    assert refused(img) is Reason.WEAK_STEP
+
+
+def test_a_speck_at_the_end_of_the_band_is_not_a_card_edge():
+    """The last void run ends at a speck, and void resumes past it."""
+    band_end = int(mm_to_px(BAND_MM))  # past the wall
+    img = scene(band_end + 100, speck=(band_end - 4, 6))
+    assert refused(img) is Reason.VOID_AFTER
 
 
 def test_unknown_strategy_is_rejected():

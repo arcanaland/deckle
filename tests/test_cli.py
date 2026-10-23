@@ -86,8 +86,24 @@ def test_a_refusal_exits_nonzero_and_says_why(empty_window, tmp_path, capsys) ->
     assert main(["rectify", str(empty_window), *FLAGS, "-o", str(out_dir)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith(f"deckle: {empty_window}: window 1:")
+    head, *rest = captured.err.splitlines()
+    assert head == f"deckle: {empty_window}: 4 problems in 1 of 2 windows"
+    assert [ln.split(":")[0] for ln in rest] == ["  window 1 (r0c1)"] * 4
     assert not out_dir.exists()
+
+
+def test_detect_lists_every_failing_window(tmp_path, capsys) -> None:
+    path = tmp_path / "two-broken.png"
+    scene = [[None, Placed()], [Placed(), Placed(bottom_extra_mm=0.4)]]
+    cv2.imwrite(str(path), jig_scene(scene))
+    assert main(["detect", str(path), *FLAGS, "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    head, *rest = captured.err.splitlines()
+    assert head == f"deckle: {path}: {len(rest)} problems in 2 of 4 windows"
+    assert sorted({ln.split(":")[0] for ln in rest}) == ["  window 0 (r0c0)", "  window 3 (r1c1)"]
+    assert "  window 0 (r0c0): left: 0 of " in captured.err
+    assert "not a rectangle" in captured.err
 
 
 def test_a_wrong_window_count_is_refused(scan, capsys) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from deckle.edges import fit_card_edge
+from deckle.edges import EdgeAttempt, EdgeFit, Reason, fit_card_edge
 from deckle.geometry import Line
 from deckle.units import EdgeStrategy, mm_to_px, px_to_mm
 
@@ -20,8 +20,32 @@ SCANLINES = np.arange(20, WIDTH - 20)
 TOL_MM = px_to_mm(1.5)
 
 
-def fit(img, strategy, **kw):
-    return fit_card_edge(img, WALL, "top", SCANLINES, strategy=strategy, **kw)
+def checked(a: EdgeAttempt) -> EdgeAttempt:
+    """The trace's invariants, asserted on every edge search a test makes."""
+    counts = a.counts()
+    assert sum(counts.values()) == a.n_scanlines == len(a.trace)
+    hit = a.trace.hit
+    assert np.isfinite(a.trace.dist_px[hit]).all()
+    assert np.isnan(a.trace.dist_px[~hit]).all()
+    if a.fit is not None:
+        assert counts[Reason.HIT] == len(a.fit.gap_mm) == len(a.fit.fit.inlier_mask)
+    return a
+
+
+def dominant(a: EdgeAttempt) -> Reason:
+    """The most common reason a scanline missed."""
+    misses = {r: n for r, n in a.counts().items() if r is not Reason.HIT}
+    return max(misses, key=misses.__getitem__)
+
+
+def attempt(img, strategy, **kw) -> EdgeAttempt:
+    return checked(fit_card_edge(img, WALL, "top", SCANLINES, strategy=strategy, **kw))
+
+
+def fit(img, strategy, **kw) -> EdgeFit:
+    got = attempt(img, strategy, **kw).fit
+    assert got is not None
+    return got
 
 
 def padded(gap_px: int, border_px: int = int(mm_to_px(1.5))) -> np.ndarray:
@@ -107,8 +131,9 @@ def test_a_displaced_anchor_still_reports_the_gap_from_the_wall():
 def test_brightest_refuses_an_empty_window():
     img = np.zeros((WALL_Y + 400, WIDTH), dtype=np.uint8)
     img[:WALL_Y] = WALL_LUMA
-    with pytest.raises(ValueError, match="Card edge not found"):
-        fit(img, EdgeStrategy.BRIGHTEST)
+    got = attempt(img, EdgeStrategy.BRIGHTEST)
+    assert got.fit is None
+    assert dominant(got) is Reason.WEAK_STEP
 
 
 def test_innermost_reports_the_wall_in_an_empty_window():
@@ -116,3 +141,39 @@ def test_innermost_reports_the_wall_in_an_empty_window():
     img = np.zeros((WALL_Y + 400, WIDTH), dtype=np.uint8)
     img[:WALL_Y] = WALL_LUMA
     assert abs(fit(img, EdgeStrategy.INNERMOST).median_gap_mm) < TOL_MM
+
+
+def test_brightest_refuses_a_step_into_texture():
+    """A rise onto something that does not stay level is not a card."""
+    gap_px = int(mm_to_px(1.0))
+    img = padded(gap_px, border_px=400)
+    stripes = WALL_Y + gap_px + 8
+    for y in range(stripes, stripes + 60, 6):
+        img[y : y + 3] = 140
+    got = attempt(img, EdgeStrategy.BRIGHTEST)
+    assert got.fit is None
+    assert dominant(got) is Reason.NOT_FLAT
+
+
+def test_innermost_refuses_a_window_with_no_step():
+    img = np.full((WALL_Y + 400, WIDTH), WALL_LUMA, dtype=np.uint8)
+    got = attempt(img, EdgeStrategy.INNERMOST)
+    assert got.fit is None
+    assert dominant(got) is Reason.NO_STEP
+
+
+def test_a_scanline_that_runs_off_the_image_is_recorded():
+    img, _ = unpadded()
+    wall = Line(point=np.array([0.0, 2.0]), direction=np.array([1.0, 0.0]))
+    got = checked(fit_card_edge(img, wall, "top", SCANLINES, strategy=EdgeStrategy.INNERMOST))
+    assert got.counts()[Reason.OFF_IMAGE] == len(SCANLINES)
+
+
+def test_the_trace_records_where_each_hit_landed():
+    gap_px = int(mm_to_px(1.0))
+    got = attempt(padded(gap_px), EdgeStrategy.BRIGHTEST)
+    assert got.counts()[Reason.HIT] == len(SCANLINES)
+    assert (got.trace.scanline == SCANLINES).all()
+    assert np.allclose(got.trace.anchor, WALL_Y)
+    assert (got.trace.d >= 0).all()
+    assert np.allclose(got.trace.dist_px, gap_px, atol=1.5)

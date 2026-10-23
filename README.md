@@ -16,3 +16,4 @@ Decks are saved in Arcana Land's [Tarot Deck format](https://github.com/arcanala
 Detecting a card in an image:
 - Send a bunch of scanlines across the image to find card edges
 - Fit a line through where we think a card edge is
+

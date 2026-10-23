@@ -108,3 +108,23 @@ def test_a_quad_measures_its_sides():
     assert (q.left, q.right) == (10.0, pytest.approx(np.hypot(1.0, 9.0)))
     assert q.width == pytest.approx(0.5 * (q.top + q.bottom))
     assert q.height == pytest.approx(0.5 * (q.left + q.right))
+
+
+def test_the_inlier_mask_composes_every_trim():
+    """Far outliers go in the first trim; near ones only once the far ones stop inflating
+    the spread. The mask must mark both."""
+    rng = np.random.default_rng(0)
+    x = np.linspace(0, 1000, 600)
+    y = 50.0 + rng.normal(0, 0.3, x.size)
+    far, near = np.arange(0, x.size, 37), np.arange(11, x.size, 41)
+    y[far] += 40.0
+    y[near] += 3.0
+    pts = np.column_stack((x, y))
+    fit = fit_line_trimmed(pts)
+    assert fit.inlier_mask.shape == (fit.n_input,)
+    assert np.array_equal(pts[fit.inlier_mask], fit.inliers)
+    assert not fit.inlier_mask[far].any()
+    assert not fit.inlier_mask[near].any()
+    # the near outliers survive a single trim, so this mask really is a composition
+    once = fit_line_trimmed(pts, iterations=1)
+    assert once.inlier_mask[near].all()
