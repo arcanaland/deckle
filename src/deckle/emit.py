@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import tomllib
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -10,10 +11,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 import cv2
+import tomlkit
+from tomlkit.exceptions import TOMLKitError
 
 from . import tomlout
 from .ids import is_custom_name
-from .project import CARD_BACKS_DIR, NAMES_DIR, Master, Project
+from .project import CARD_BACKS_DIR, DECK_IN_FILE, NAMES_DIR, PROJECT_FILE, Master, Project
 
 SCHEMA_VERSION = "2.0"
 
@@ -29,11 +32,13 @@ DECK_KEY_ORDER = (
     "name",
     "version",
     "identifier",
+    "related",
     "signifies",
     "default_language",
     "aspect_ratio",
     "icon",
-    "author",
+    "creator",
+    "artist",
     "packager",
     "publisher",
     "description",
@@ -46,11 +51,26 @@ DECK_KEY_ORDER = (
     "derivation",
     "created_date",
     "updated_date",
+    "published_date",
     "links",
     "tags",
 )
 
 PATH_FIELDS = ("icon",)
+DATE_FIELDS = ("created_date", "updated_date", "published_date")
+
+# The top-level tables of a deck.toml, which are all deck.in.toml may hold.
+DECK_TABLES = (
+    "deck",
+    "card_backs",
+    "cards",
+    "suits",
+    "ranks",
+    "minor_arcana",
+    "excluded_cards",
+    "strings",
+    "app",
+)
 
 
 class EmitError(RuntimeError):
@@ -117,10 +137,9 @@ def _as_date_string(value: Any, what: str) -> str:
     return value
 
 
-def _clean_links(links: Any) -> list[dict[str, Any]]:
+def _check_links(links: Any) -> list[dict[str, Any]]:
     if not isinstance(links, list):
         raise EmitError("[deck].links must be an array of tables")
-    out = []
     for entry in links:
         if not isinstance(entry, dict):
             raise EmitError("each [deck].links entry must be a table")
@@ -130,27 +149,75 @@ def _clean_links(links: Any) -> list[dict[str, Any]]:
         parsed = urlparse(url or "")
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise EmitError(f"link url {url!r} must be absolute with an http(s) scheme")
-        clean = {"rel": rel, "url": url}
-        if entry.get("title"):
-            clean["title"] = entry["title"]
-        out.append(clean)
+    return links
+
+
+def _merge(computed: dict[str, Any], authored: dict[str, Any]) -> dict[str, Any]:
+    out = dict(computed)
+    for key, value in authored.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
     return out
 
 
-def build_deck_table(project: Project) -> dict[str, Any]:
-    src = dict(project.deck)
+def _with_safe_image(entry: Any, what: str) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise EmitError(f"{what} must be a table")
+    out = dict(entry)
+    if "image" in out:
+        out["image"] = safe_relpath(str(out["image"]), f"{what}.image")
+    return out
+
+
+def authored_tables(project: Project) -> tuple[dict[str, Any], str]:
+    """The authored metadata as deck.toml-shaped tables"""
+    overlay = project.authored()
+    if overlay is None:
+        return {"deck": dict(project.deck), "cards": dict(project.card_meta)}, PROJECT_FILE
+
+    held = [f"[{key}]" for key in ("deck", "card_meta") if project.doc.get(key)]
+    if held:
+        raise EmitError(
+            f"{PROJECT_FILE} has {' and '.join(held)} and {DECK_IN_FILE} exists; only one of them "
+            f"may hold authored metadata. Move it into {DECK_IN_FILE} ([card_meta] becomes "
+            f"[cards]) and delete it from {PROJECT_FILE}"
+        )
+    for key, value in overlay.items():
+        if key not in DECK_TABLES:
+            raise EmitError(
+                f"{DECK_IN_FILE}: {key!r} is not a deck.toml table; expected one of "
+                f"{', '.join(DECK_TABLES)}"
+            )
+        if not isinstance(value, dict):
+            raise EmitError(f"{DECK_IN_FILE}: {key} must be a table")
+    deck = overlay.get("deck", {})
+    computed = {"schema_version": SCHEMA_VERSION, "aspect_ratio": project.config.aspect}
+    for key, value in computed.items():
+        # Restating the computed value is harmless, as the file is shaped like the output
+        if key in deck and deck[key] != value:
+            raise EmitError(
+                f"{DECK_IN_FILE}: [deck].{key} = {deck[key]!r}, but emit computes {value!r}; "
+                "remove it"
+            )
+    return overlay, DECK_IN_FILE
+
+
+def build_deck_table(src: dict[str, Any], *, aspect: float, source: Path) -> dict[str, Any]:
+    src = dict(src)
     for required in ("name", "version"):
         if not src.get(required):
-            raise EmitError(f"[deck].{required} is required; set it in {project.root}/deckle.toml")
+            raise EmitError(f"[deck].{required} is required; set it in {source}")
 
     out: dict[str, Any] = {}
     src["schema_version"] = SCHEMA_VERSION
-    src.setdefault("aspect_ratio", project.config.aspect)
-    for key in ("created_date", "updated_date"):
+    src.setdefault("aspect_ratio", aspect)
+    for key in DATE_FIELDS:
         if key in src:
             src[key] = _as_date_string(src[key], key)
     if "links" in src:
-        src["links"] = _clean_links(src["links"])
+        src["links"] = _check_links(src["links"])
     for key in PATH_FIELDS:
         if key in src:
             src[key] = safe_relpath(str(src[key]), f"[deck].{key}")
@@ -169,32 +236,73 @@ def build_deck_table(project: Project) -> dict[str, Any]:
     return out
 
 
+def _card_backs(
+    project: Project, authored: dict[str, Any], backs: list[str], warnings: list[str]
+) -> dict[str, Any]:
+    table: dict[str, Any] = {}
+    origin = "card_back_default"
+    if project.config.card_back_default:
+        table["default"] = project.config.card_back_default
+    if "default" in authored:
+        origin = "[card_backs].default"
+    table = _merge(table, authored)
+
+    default = table.get("default")
+    if default is not None and default not in backs:
+        warnings.append(
+            f"{origin} = {default!r} has no master under masters/{CARD_BACKS_DIR}/; "
+            "omitting [card_backs].default"
+        )
+        del table["default"]
+
+    if "designs" in table:
+        designs = table.pop("designs")
+        if not isinstance(designs, dict):
+            raise EmitError("[card_backs].designs must be a table")
+        kept = {}
+        for key, entry in sorted(designs.items()):
+            what = f"[card_backs.designs.{key}]"
+            if key not in backs:
+                warnings.append(
+                    f"{what} has no master under masters/{CARD_BACKS_DIR}/; not writing it"
+                )
+                continue
+            kept[key] = _with_safe_image(entry, what)
+        if kept:
+            table["designs"] = kept
+    return table
+
+
 def build_deck_doc(project: Project, masters: list[Master], warnings: list[str]) -> dict[str, Any]:
     """Assemble deck.toml."""
+    authored, source = authored_tables(project)
+    meta_table = "cards" if source == DECK_IN_FILE else "card_meta"
+
     fronts = [m for m in masters if not m.is_back]
     backs = sorted({m.design for m in masters if m.is_back and m.design})
-    present_ids = {str(m.card) for m in fronts}
+    # A variant is present under its own reference and as its card.
+    present_ids = {str(m.card) for m in fronts} | {m.ref for m in fronts}
 
-    doc: dict[str, Any] = {"deck": build_deck_table(project)}
-
-    wanted_default = project.config.card_back_default
-    if wanted_default:
-        if wanted_default in backs:
-            doc["card_backs"] = {"default": wanted_default}
-        else:
-            warnings.append(
-                f"card_back_default = {wanted_default!r} has no master under "
-                f"masters/{CARD_BACKS_DIR}/; omitting [card_backs].default"
-            )
-
-    cards = {
-        ref: dict(meta)
-        for ref, meta in sorted(project.card_meta.items())
-        if ref in present_ids and meta
+    doc: dict[str, Any] = {
+        "deck": build_deck_table(
+            authored.get("deck", {}), aspect=project.config.aspect, source=project.root / source
+        )
     }
-    for ref, meta in project.card_meta.items():
-        if ref not in present_ids and meta:
-            warnings.append(f"[card_meta.{ref!r}] has no master; not writing a [cards] row for it")
+
+    card_backs = _card_backs(project, authored.get("card_backs", {}), backs, warnings)
+    if card_backs:
+        doc["card_backs"] = card_backs
+
+    cards = {}
+    for ref, meta in sorted(authored.get("cards", {}).items()):
+        if not meta:
+            continue
+        if ref not in present_ids:
+            warnings.append(
+                f"[{meta_table}.{ref!r}] has no master; not writing a [cards] row for it"
+            )
+            continue
+        cards[ref] = _with_safe_image(meta, f"[{meta_table}.{ref!r}]")
     if cards:
         doc["cards"] = cards
 
@@ -207,14 +315,72 @@ def build_deck_doc(project: Project, masters: list[Master], warnings: list[str])
         kept = [r for r in ranks if r in have]
         if kept:
             suits[suit] = {"ranks": kept}
+    suits = _merge(suits, authored.get("suits", {}))
     if suits:
         doc["suits"] = dict(sorted(suits.items()))
 
-    excluded = [c for c in roster.excluded if c not in present_ids]
+    for key in ("ranks", "minor_arcana"):
+        if authored.get(key):
+            doc[key] = dict(authored[key])
+
+    excluded: dict[str, Any] = {"cards": [c for c in roster.excluded if c not in present_ids]}
+    excluded = _merge(excluded, authored.get("excluded_cards", {}))
+    if isinstance(excluded.get("cards"), list):
+        for card in excluded["cards"]:
+            if card in present_ids:
+                warnings.append(f"[excluded_cards] names {card!r}, which has a master; dropping it")
+        excluded["cards"] = [c for c in excluded["cards"] if c not in present_ids]
+        if not excluded["cards"]:
+            del excluded["cards"]
     if excluded:
-        doc["excluded_cards"] = {"cards": list(excluded)}
+        doc["excluded_cards"] = excluded
+
+    for key in ("strings", "app"):
+        if authored.get(key):
+            doc[key] = dict(authored[key])
 
     return doc
+
+
+def _key_path(path: tuple[str, ...]) -> str:
+    return ".".join(tomlout.format_key(k) for k in path)
+
+
+def _reconcile(
+    node: Any, target: dict[str, Any], path: tuple[str, ...], changes: list[str]
+) -> None:
+    """Edit a parsed table in place."""
+    for key in [k for k in node if k not in target]:
+        del node[key]
+        changes.append(f"-{_key_path((*path, key))}")
+    for key, value in target.items():
+        if key not in node:
+            node[key] = value
+            changes.append(f"+{_key_path((*path, key))}")
+            continue
+        current = node[key]
+        plain = current.unwrap() if hasattr(current, "unwrap") else current
+        if plain == value:
+            continue
+        if isinstance(value, dict) and isinstance(plain, dict):
+            _reconcile(current, value, (*path, key), changes)
+        else:
+            node[key] = value
+            changes.append(f"~{_key_path((*path, key))}")
+
+
+def render_over(authored: str, doc: dict[str, Any], warnings: list[str]) -> str:
+    """The authored text edited only where doc differs from it."""
+    try:
+        parsed = tomlkit.parse(authored)
+    except TOMLKitError as exc:
+        raise EmitError(f"cannot parse {DECK_IN_FILE}: {exc}") from None
+    changes: list[str] = []
+    _reconcile(parsed, doc, (), changes)
+    text = tomlkit.dumps(parsed)
+    if tomllib.loads(text) != doc:
+        raise EmitError(f"editing {DECK_IN_FILE} into deck.toml did not produce the deck table")
+    return text
 
 
 # -- image emission -------------------------------------------------------------------
@@ -282,7 +448,11 @@ def emit(project: Project, target: Path | None = None) -> EmitResult:
 
     warnings: list[str] = []
     doc = build_deck_doc(project, masters, warnings)
-    text = tomlout.dumps(doc)
+    authored = project.authored_text()
+    try:
+        text = tomlout.dumps(doc) if authored is None else render_over(authored, doc, warnings)
+    except (tomlout.TomlError, TOMLKitError) as exc:
+        raise EmitError(f"cannot write deck.toml: {exc}") from None
 
     dest.mkdir(parents=True, exist_ok=True)
     _wipe(dest)

@@ -209,7 +209,7 @@ def test_a_bad_strategy_is_reported_by_status_and_refused_by_detect(scan, tmp_pa
 def test_init_then_init_again_is_refused(tmp_path, capsys) -> None:
     assert main(["init", "proj"]) == 0
     assert capsys.readouterr().out.startswith("initialised proj\n")
-    assert Project.load(tmp_path / "proj").deck["name"] == "proj"
+    assert Project.load(tmp_path / "proj").authored()["deck"]["name"] == "proj"
     assert main(["init", "proj"]) == 1
     assert "already exists" in capsys.readouterr().err
 
