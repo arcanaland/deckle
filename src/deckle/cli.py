@@ -84,7 +84,7 @@ def _common(p: argparse.ArgumentParser) -> None:
 
 
 def _optional_project(args) -> Project | None:
-    """The project a detect/rectify run sits in. Outside one, flags and defaults only."""
+    """The project we're in."""
     if args.project is not None:
         return Project.discover(args.project)
     root = find_project()
@@ -171,8 +171,7 @@ def _cmd_init(args) -> int:
     root = args.directory
     project = init(root, args.name or root.resolve().name, deck_dir=args.deck_dir)
     print(f"initialised {project.root}")
-    print("  edit [deck] and [roster] in deckle.toml before emitting: the roster")
-    print("  starts at the canonical 78, which is a starting point, not a fact")
+    print("  edit [deck] and [roster] in deckle.toml manually")
     return 0
 
 
@@ -197,14 +196,15 @@ def _cmd_assign(args) -> int:
 
 def _cmd_emit(args) -> int:
     result = emit(Project.discover(args.project), args.deck_dir)
+
     for w in result.warnings:
         print(f"deckle: warning: {w}", file=sys.stderr)
+
     print(
         f"{result.target}: {result.cards} card(s), {result.backs} back(s), "
         f"{result.images} image(s)"
     )
-    # said every time, so a gate that does not exist is never implied
-    print("  not validated: nothing checks this deck against the spec yet")
+
     return 0
 
 
