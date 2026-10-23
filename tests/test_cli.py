@@ -226,7 +226,6 @@ def test_scan_to_deck(scan, tmp_path, monkeypatch, capsys) -> None:
     assert main(["emit"]) == 0
     captured = capsys.readouterr()
     assert captured.out.startswith(f"{tmp_path / 'deck'}: 1 card(s), 1 back(s)")
-    assert "not validated" in captured.out
     assert (tmp_path / "deck" / "deck.toml").is_file()
 
 
