@@ -92,8 +92,7 @@ def _common(p: argparse.ArgumentParser) -> None:
         const=_PROJECT_DEBUG,
         default=None,
         metavar="DIR",
-        help="create a debug image and stats"
-        "(default DIR: debug/)",
+        help="create a debug image and stats" "(default DIR: debug/)",
     )
 
 
