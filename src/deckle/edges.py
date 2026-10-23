@@ -69,14 +69,14 @@ class Reason(IntEnum):
 class Trace:
     """Per-scanline record of one edge search, one element per scanline."""
 
-    at: np.ndarray  # int32, scanline coordinate
+    scanline: np.ndarray  # int32 px along the edge: x for top/bottom, y for left/right
     anchor: np.ndarray  # float32 px, where the search started
     reason: np.ndarray  # uint8 Reason
     d: np.ndarray  # int16, chosen step sample (-1 where none was chosen)
     dist_px: np.ndarray  # float32, px inward from the anchor (NaN unless hit)
 
     def __len__(self) -> int:
-        return len(self.at)
+        return len(self.scanline)
 
     @property
     def hit(self) -> np.ndarray:
@@ -205,7 +205,7 @@ def _subpixel(prof: np.ndarray, d: int, half: int = 4, search: int = 4) -> float
 
 
 def _profile(
-    gray: np.ndarray, edge: str, at: int, anchor: float, n: int, lead_px: float
+    gray: np.ndarray, edge: str, scanline: int, anchor: float, n: int, lead_px: float
 ) -> tuple[np.ndarray, float] | None:
     """Luma profile walking inward from the wall. Returns (profile, distance of sample 0)."""
     dx, dy = INWARD[edge]
@@ -214,14 +214,14 @@ def _profile(
         stop = start + n * dy
         if min(start, stop) < 0 or max(start, stop) >= gray.shape[0]:
             return None
-        prof = gray[start:stop:dy, at]
+        prof = gray[start:stop:dy, scanline]
         d0 = (start - anchor) * dy
     else:
         start = int(round(anchor - lead_px * dx))
         stop = start + n * dx
         if min(start, stop) < 0 or max(start, stop) >= gray.shape[1]:
             return None
-        prof = gray[at, start:stop:dx]
+        prof = gray[scanline, start:stop:dx]
         d0 = (start - anchor) * dx
     return (prof.astype(np.float32), float(d0)) if len(prof) > 12 else None
 
@@ -258,18 +258,18 @@ def fit_card_edge(
     dists = np.full(n, np.nan, dtype=np.float32)
 
     pts, gaps, steps = [], [], []
-    for i, at in enumerate(scanlines):
+    for i, scanline in enumerate(scanlines):
         dx, dy = INWARD[edge]
         step_dir = dy if edge in ("top", "bottom") else dx
 
         # find the wall
-        wall_at = _line_at(wall, float(at), edge)
+        wall_at = _line_at(wall, float(scanline), edge)
 
         anchor = wall_at + offset_px * step_dir
         anchors[i] = anchor
 
         # compute the luma of samples on this line
-        got = _profile(gray, edge, int(at), anchor, n_samples, lead_px)
+        got = _profile(gray, edge, int(scanline), anchor, n_samples, lead_px)
         if got is None:
             reasons[i] = Reason.OFF_IMAGE
             continue
@@ -333,13 +333,13 @@ def fit_card_edge(
         dist = d0 + sub  # px inward from the anchor
         reasons[i], dists[i] = Reason.HIT, dist
         if edge in ("top", "bottom"):
-            pts.append((float(at), anchor + dist * dy))
+            pts.append((float(scanline), anchor + dist * dy))
         else:
-            pts.append((anchor + dist * dx, float(at)))
+            pts.append((anchor + dist * dx, float(scanline)))
         gaps.append(px_to_mm(dist + offset_px, dpi))
         steps.append(float(r[d]))
 
-    trace = Trace(at=scanlines, anchor=anchors, reason=reasons, d=chosen, dist_px=dists)
+    trace = Trace(scanline=scanlines, anchor=anchors, reason=reasons, d=chosen, dist_px=dists)
 
     fit = None
     if len(pts) >= MIN_HITS:

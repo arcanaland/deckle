@@ -173,7 +173,7 @@ def test_the_trace_records_where_each_hit_landed():
     gap_px = int(mm_to_px(1.0))
     got = attempt(padded(gap_px), EdgeStrategy.BRIGHTEST)
     assert got.counts()[Reason.HIT] == len(SCANLINES)
-    assert (got.trace.at == SCANLINES).all()
+    assert (got.trace.scanline == SCANLINES).all()
     assert np.allclose(got.trace.anchor, WALL_Y)
     assert (got.trace.d >= 0).all()
     assert np.allclose(got.trace.dist_px, gap_px, atol=1.5)
