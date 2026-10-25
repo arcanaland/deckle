@@ -377,6 +377,8 @@ def render_over(authored: str, doc: dict[str, Any], warnings: list[str]) -> str:
         raise EmitError(f"cannot parse {DECK_IN_FILE}: {exc}") from None
     changes: list[str] = []
     _reconcile(parsed, doc, (), changes)
+    if changes:
+        warnings.append(f"deck.toml differs from {DECK_IN_FILE}: {', '.join(changes)}")
     text = tomlkit.dumps(parsed)
     if tomllib.loads(text) != doc:
         raise EmitError(f"editing {DECK_IN_FILE} into deck.toml did not produce the deck table")
