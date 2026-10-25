@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 import cv2
 
 from .ids import CardId, check_custom_name, resolve_ref
-from .project import CARD_BACKS_DIR, Project
-from .staging import provenance_for, read_staging_index, write_staging_index
+from .labels import ROTATE_MARK, Label, LabelError, format_label, parse_label, write_label
+from .project import CARD_BACKS_DIR, PROJECT_FILE, Project
+from .staging import MEASURED_KEYS, provenance_for, read_staging_index, write_staging_index
+
+_SLOT = re.compile(r"r[0-9]+c[0-9]+")
 
 
 class AssignError(RuntimeError):
@@ -96,3 +101,92 @@ def assign(
         write_staging_index(project, index)
 
     return Assignment(ref=ref_out, source=source, dest=dest, replaced=replaced, rotated=rotate_180)
+
+
+@dataclass(frozen=True)
+class Unassignment:
+    ref: str
+    master: Path
+    restaged: Path
+    label: str
+    labelled: bool  # False when the filesystem refused the label xattr
+
+
+@dataclass(frozen=True)
+class _Undo:
+    label: Label
+    master: Path
+    restaged: Path
+    row: dict[str, Any]
+
+
+def _restaged_name(label: Label, record: dict[str, Any]) -> str:
+    """The name rectify gave the file, so a later assign finds its index row again."""
+    scan, slot = record.get("source_scan"), record.get("slot")
+    if scan and slot and _SLOT.fullmatch(slot):
+        return f"{PurePosixPath(scan).stem}_{slot}.png"
+    return f"{label.target.replace(':', '.')}.png"
+
+
+def unassign(project: Project, refs: list[str]) -> list[Unassignment]:
+    """Put masters back in staging/ as they were before assign: name, index row, label."""
+    if project.degraded:
+        raise AssignError(
+            f"cannot unassign: {project.degraded_reason}. Fix or remove the state file first."
+        )
+
+    back_default = project.doc.get("project", {}).get("card_back_default")
+    undo: list[_Undo] = []
+    problems: list[str] = []
+    for text in refs:
+        try:
+            label = parse_label(text, card_back_default=back_default)
+        except LabelError as exc:
+            problems.append(str(exc))
+            continue
+        if label.rotate_180:
+            problems.append(f"{text!r}: {ROTATE_MARK} has no meaning here; unassign restores it")
+            continue
+        record = project.cards.get(label.target)
+        if record is None:
+            problems.append(f"{label.target} has no record in {PROJECT_FILE}")
+            continue
+        master = project.root / record["master"] if record.get("master") else None
+        if master is None or not master.is_file():
+            problems.append(f"{label.target}: its master {record.get('master')!r} is missing")
+            continue
+        rotated = bool(record.get("rotate_180"))
+        restaged = project.staging_dir / _restaged_name(label, record)
+        undo.append(_Undo(replace(label, rotate_180=rotated), master, restaged, record))
+
+    seen: dict[Path, str] = {}
+    for u in undo:
+        if u.restaged.exists():
+            problems.append(f"{u.label.target}: {u.restaged.name} is already in staging/")
+        elif u.restaged in seen:
+            problems.append(
+                f"{u.label.target} and {seen[u.restaged]} both restage as {u.restaged.name}"
+            )
+        seen[u.restaged] = u.label.target
+    if problems:
+        raise AssignError("nothing was unassigned:\n  " + "\n  ".join(problems))
+
+    index = read_staging_index(project)
+    out: list[Unassignment] = []
+    for u in undo:
+        _move(u.master, u.restaged, rotate_180=u.label.rotate_180)
+        text = format_label(u.label)
+        try:
+            write_label(u.restaged, text)
+            labelled = True
+        except OSError:
+            labelled = False
+        if _SLOT.fullmatch(u.row.get("slot") or ""):
+            index[u.restaged.name] = {
+                k: u.row[k] for k in ("source_scan", "slot", *MEASURED_KEYS) if k in u.row
+            }
+            write_staging_index(project, index)
+        project.forget_card(u.label.target)
+        project.save()
+        out.append(Unassignment(u.label.target, u.master, u.restaged, text, labelled))
+    return out

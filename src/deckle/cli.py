@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from . import build_id
-from .assign import AssignError, assign
+from .assign import AssignError, assign, unassign
 from .debug import write_bundle
 from .detect import Card, CardSpec, DetectionError, detect_report
 from .emit import EmitError, emit
@@ -254,6 +254,19 @@ def _cmd_assign(args) -> int:
     return 0
 
 
+def _cmd_unassign(args) -> int:
+    project = Project.discover(args.project)
+    for u in unassign(project, args.refs):
+        print(f"{u.ref} -> {u.restaged.relative_to(project.root)}  (label {u.label})")
+        if not u.labelled:
+            print(
+                f"deckle: warning: could not write the label onto {u.restaged.name}; "
+                "label it by hand",
+                file=sys.stderr,
+            )
+    return 0
+
+
 _FILE_ONLY_FLAGS = {
     "--variant": lambda a: a.variant is not None,
     "--card-back": lambda a: a.card_back is not None,
@@ -362,6 +375,14 @@ def _parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="let the plan replace masters that already exist"
     )
     a.set_defaults(func=_cmd_assign, usage=a.error)
+
+    u = sub.add_parser(
+        "unassign",
+        help="put masters back in staging/, labelled, to relabel and assign again",
+    )
+    u.add_argument("refs", nargs="+", metavar="ref", help="a card ID or label, e.g. m2:alt")
+    _project_arg(u)
+    u.set_defaults(func=_cmd_unassign)
 
     e = sub.add_parser("emit", help="generate the deck directory from masters/")
     _project_arg(e)

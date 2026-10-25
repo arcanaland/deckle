@@ -4,8 +4,9 @@ import cv2
 import numpy as np
 import pytest
 
-from deckle.assign import AssignError, assign
+from deckle.assign import AssignError, assign, unassign
 from deckle.ids import IdError
+from deckle.labels import read_label
 from deckle.project import PROJECT_FILE, Project, init
 from deckle.staging import read_staging_index, write_staging_index
 
@@ -172,3 +173,119 @@ def test_a_degraded_project_refuses_to_assign(tmp_path):
     with pytest.raises(AssignError, match="not valid TOML"):
         assign(Project.load(project.root), src, "major_arcana.03")
     assert src.exists()
+
+
+# --- unassign ---------------------------------------------------------------------------
+
+
+def label_of(path) -> str | None:
+    try:
+        return read_label(path)
+    except OSError:
+        return None
+
+
+def assigned(project, name: str, ref: str, **kw):
+    """Stage an indexed png and assign it; returns the staged pixels."""
+    path, img = stage_png(project, name)
+    scan, _, slot = name[: -len(".png")].rpartition("_")
+    index = read_staging_index(project)
+    index[name] = {"source_scan": f"{scan}.jpg", "slot": slot, "width_mm": 70.1, "dpi": 600.0}
+    write_staging_index(project, index)
+    assign(project, path, ref, **kw)
+    return img
+
+
+def test_unassign_restores_the_staged_file(tmp_path):
+    project = make_project(tmp_path)
+    img = assigned(project, "scan_r1c0.png", "minor_arcana.wands.seven", rotate_180=True)
+
+    (u,) = unassign(project, ["w7"])
+
+    staged = project.staging_dir / "scan_r1c0.png"
+    assert u.restaged == staged and u.ref == "minor_arcana.wands.seven"
+    assert not u.master.exists()
+    # back in the orientation rectify wrote, carrying the label that reassigns it as it was
+    assert np.array_equal(cv2.imread(str(staged), cv2.IMREAD_UNCHANGED), img)
+    assert u.label == "w7~"
+    if u.labelled:
+        assert label_of(staged) == "w7~"
+    assert read_staging_index(project)["scan_r1c0.png"] == {
+        "source_scan": "scan.jpg",
+        "slot": "r1c0",
+        "width_mm": 70.1,
+        "dpi": 600.0,
+    }
+    assert "minor_arcana.wands.seven" not in Project.load(project.root).cards
+
+
+def test_unassign_then_assign_is_the_same_assignment(tmp_path):
+    project = make_project(tmp_path)
+    assigned(project, "scan_r0c1.png", "major_arcana.02:alt", rotate_180=True)
+    before = dict(Project.load(project.root).cards["major_arcana.02:alt"])
+
+    (u,) = unassign(project, ["major_arcana.02:alt"])
+    assert u.label == "m2:alt~"
+    assign(project, u.restaged, "major_arcana.02:alt", rotate_180=True)
+
+    after = Project.load(project.root).cards["major_arcana.02:alt"]
+    for key in ("source_scan", "slot", "width_mm", "dpi", "rotate_180", "master"):
+        assert after[key] == before[key]
+
+
+def test_unassign_a_card_back(tmp_path):
+    project = make_project(tmp_path)
+    project.doc["project"]["card_back_default"] = "plain"
+    assigned(project, "scan_r0c0.png", None, card_back="plain")
+    (u,) = unassign(project, ["back"])
+    assert (u.ref, u.label) == ("card_backs.plain", "back:plain")
+    assert not project.back_path("plain").exists()
+
+
+def test_unassign_checks_every_ref_before_moving_any(tmp_path):
+    project = make_project(tmp_path)
+    assigned(project, "scan_r0c0.png", "minor_arcana.wands.seven")
+    master = project.masters_dir / "minor_arcana/wands/seven.png"
+
+    with pytest.raises(AssignError) as exc:
+        unassign(project, ["w7", "w8", "M2", "w7~"])
+    msg = str(exc.value)
+    assert msg.startswith("nothing was unassigned")
+    assert "minor_arcana.wands.eight has no record" in msg
+    assert "expected m<number>" in msg
+    assert "has no meaning here" in msg
+    assert master.is_file()
+    assert "minor_arcana.wands.seven" in Project.load(project.root).cards
+
+
+def test_unassign_refuses_to_overwrite_a_staged_file(tmp_path):
+    project = make_project(tmp_path)
+    assigned(project, "scan_r0c0.png", "minor_arcana.wands.seven")
+    stage(project, "scan_r0c0.png")
+    with pytest.raises(AssignError, match="already in staging"):
+        unassign(project, ["w7"])
+    assert (project.masters_dir / "minor_arcana/wands/seven.png").is_file()
+
+
+def test_unassign_refuses_a_record_whose_master_is_gone(tmp_path):
+    project = make_project(tmp_path)
+    assigned(project, "scan_r0c0.png", "minor_arcana.wands.seven")
+    (project.masters_dir / "minor_arcana/wands/seven.png").unlink()
+    with pytest.raises(AssignError, match="is missing"):
+        unassign(project, ["w7"])
+
+
+def test_thin_provenance_restages_under_the_card_name(tmp_path):
+    project = make_project(tmp_path)
+    src = stage(project, "hand-staged.png")
+    assign(project, src, "major_arcana.02:alt")
+    (u,) = unassign(project, ["m2:alt"])
+    assert u.restaged.name == "major_arcana.02.alt.png"
+    assert read_staging_index(project) == {}
+
+
+def test_unassign_refuses_a_degraded_project(tmp_path):
+    project = make_project(tmp_path)
+    (project.root / PROJECT_FILE).unlink()
+    with pytest.raises(AssignError, match="cannot unassign"):
+        unassign(Project.load(project.root), ["w7"])

@@ -5,7 +5,16 @@ import os
 
 import pytest
 
-from deckle.labels import COMMENT_XATTR, LabelError, parse_label, plan_staging, read_label
+from deckle.ids import canonical_78
+from deckle.labels import (
+    COMMENT_XATTR,
+    Label,
+    LabelError,
+    format_label,
+    parse_label,
+    plan_staging,
+    read_label,
+)
 from deckle.project import PROJECT_FILE, Project, ProjectError, init
 from deckle.staging import write_staging_index
 
@@ -105,7 +114,7 @@ def test_bare_back_with_no_default_is_refused():
 @pytest.mark.parametrize(
     "text, match",
     [
-        ("m2:Juno", "not a custom name"),
+        ("m2:Crowned", "not a custom name"),
         ("m2:king", "reserved"),
         ("back:2nd", "not a custom name"),
         ("M14", "expected m<number>"),
@@ -121,6 +130,38 @@ def test_bare_back_with_no_default_is_refused():
 def test_bad_labels(text, match):
     with pytest.raises(LabelError, match=match):
         parse(text)
+
+
+@pytest.mark.parametrize("card", canonical_78(), ids=str)
+def test_format_label_round_trips_every_card(card):
+    for variant in (None, "alt"):
+        for rotate in (False, True):
+            label = Label(card=card, variant=variant, card_back=None, rotate_180=rotate)
+            assert parse(format_label(label)) == label
+
+
+@pytest.mark.parametrize(
+    "ref, text",
+    [
+        ("major_arcana.00", "m0"),
+        ("major_arcana.14:crowned", "m14:crowned"),
+        ("minor_arcana.wands.ace", "w1"),
+        ("minor_arcana.cups.ten", "c10"),
+        ("minor_arcana.pentacles.page", "pp"),
+        ("major_arcana.the_fool", "major_arcana.the_fool"),
+        ("minor_arcana.coins.seven", "minor_arcana.coins.seven"),
+        ("minor_arcana.swords.sevn", "minor_arcana.swords.sevn"),
+    ],
+)
+def test_format_label_is_short_where_it_can_be(ref, text):
+    label = parse(ref)
+    assert format_label(label) == text
+    assert parse(text) == label
+
+
+def test_format_label_names_the_back_design_even_when_it_is_the_default():
+    label = parse("back~", "plain")
+    assert format_label(label) == "back:plain~"
 
 
 # --- planning ---------------------------------------------------------------------------

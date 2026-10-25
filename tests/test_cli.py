@@ -6,13 +6,15 @@ import os
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pytest
 from test_detect import CARD_MM, DPI, TWO, Placed, jig_scene
 
 from deckle import build_id
 from deckle.cli import _parser, _settings, main
 from deckle.detect import CardSpec
-from deckle.labels import COMMENT_XATTR
+from deckle.ids import parse_card_id
+from deckle.labels import COMMENT_XATTR, read_label
 from deckle.project import PROJECT_FILE, Project, init
 from deckle.staging import read_staging_index
 from deckle.units import DEFAULT_DPI, DEFAULT_STRATEGY, EdgeStrategy
@@ -361,6 +363,54 @@ def test_label_mode_refuses_a_degraded_project(staged, capsys) -> None:
     assert main(["assign", "--apply"]) == 1
     assert capsys.readouterr().err.startswith("deckle: cannot assign: ")
     assert first.is_file()
+
+
+def test_unassign_to_swap_a_default_and_its_variant(staged, capsys) -> None:
+    project, (first, second) = staged
+    label(first, "m2")
+    assert main(["assign", "--apply"]) == 0
+    label(second, "m2:late")
+    assert main(["assign", "--apply"]) == 0
+    capsys.readouterr()
+
+    assert main(["unassign", "m2", "major_arcana.02:late"]) == 0
+    assert capsys.readouterr().out == (
+        f"major_arcana.02 -> staging/{first.name}  (label m2)\n"
+        f"major_arcana.02:late -> staging/{second.name}  (label m2:late)\n"
+    )
+    assert read_label(first) == "m2" and read_label(second) == "m2:late"
+    assert Project.load(project.root).cards == {}
+
+    label(first, "m2:early")
+    label(second, "m2")
+    assert main(["assign", "--apply"]) == 0
+    cards = Project.load(project.root).cards
+    assert cards["major_arcana.02"]["slot"] == "r0c1"
+    assert cards["major_arcana.02:early"]["slot"] == "r0c0"
+    assert not project.master_path(parse_card_id("major_arcana.02"), "late").exists()
+
+
+def test_unassign_to_add_a_forgotten_rotation(staged, capsys) -> None:
+    project, (first, _) = staged
+    pixels = cv2.imread(str(first), cv2.IMREAD_UNCHANGED)
+    label(first, "w7")
+    assert main(["assign", "--apply"]) == 0
+
+    assert main(["unassign", "w7"]) == 0
+    label(first, "w7~")
+    assert main(["assign", "--apply"]) == 0
+
+    master = project.masters_dir / "minor_arcana/wands/seven.png"
+    assert np.array_equal(
+        cv2.imread(str(master), cv2.IMREAD_UNCHANGED), cv2.rotate(pixels, cv2.ROTATE_180)
+    )
+    row = Project.load(project.root).cards["minor_arcana.wands.seven"]
+    assert (row["rotate_180"], row["slot"]) == (True, "r0c0")
+
+
+def test_an_unassign_refusal_exits_nonzero(staged, capsys) -> None:
+    assert main(["unassign", "w7"]) == 1
+    assert "nothing was unassigned" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

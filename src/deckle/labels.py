@@ -133,6 +133,30 @@ def parse_label(text: str, *, card_back_default: str | None) -> Label:
     return Label(card=card, variant=variant, card_back=None, rotate_180=rotate)
 
 
+def format_label(label: Label) -> str:
+    """The shortest text `parse_label` reads back as `label`, whatever the default back."""
+    if label.card is None:
+        body = f"{BACK}:{label.card_back}"
+    else:
+        body = _short(label.card) or str(label.card)
+        if label.variant is not None:
+            body += f":{label.variant}"
+    return body + (ROTATE_MARK if label.rotate_180 else "")
+
+
+def _short(card: CardId) -> str | None:
+    if card.kind == "major":
+        return f"m{int(card.key)}" if card.key and card.key.isdigit() else None
+    suit = next((k for k, v in _SUITS.items() if v == card.suit), None)
+    # the first spelling of each rank in the table: digits for ace to ten
+    rank = next((k for k, v in _RANKS.items() if v == card.rank), None)
+    return f"{suit}{rank}" if suit and rank else None
+
+
+def write_label(path: Path, text: str) -> None:
+    os.setxattr(path, COMMENT_XATTR, text.encode("utf-8"))
+
+
 def read_label(path: Path) -> str | None:
     """The comment xattr, stripped, or None when there is none."""
     try:

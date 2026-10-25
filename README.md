@@ -18,6 +18,7 @@ deckle init my-deck            # create a project
 deckle rectify scan.png        # process a single scan image
 deckle assign                  # name staged masters from labels (dry run)
 deckle assign --apply
+deckle unassign m2 w7          # back to staging/, labelled, to relabel and assign again
 deckle status
 deckle emit                    # write the output deck directory
 ```
