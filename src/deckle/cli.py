@@ -219,7 +219,7 @@ def _cmd_init(args) -> int:
     root = args.directory
     project = init(root, args.name or root.resolve().name, deck_dir=args.deck_dir)
     print(f"initialised {project.root}")
-    print("  edit [deck] and [roster] in deckle.toml manually")
+    print("  edit [deck] in deck.in.toml, and [roster] in deckle.toml")
     return 0
 
 
