@@ -11,6 +11,17 @@ Decks are saved in Arcana Land's [Tarot Deck format](https://github.com/arcanala
 - Access to a 3D printer to create jigs that will hold cards in your scanner.
 - A slab of dark material to place on top of the cards while scanning, such as black polyurethane foam (Optional)
 
+## Usage
+
+```
+deckle init my-deck            # create a project
+deckle rectify scan.png        # process a single scan image
+deckle assign                  # name staged masters from labels (dry run)
+deckle assign --apply
+deckle status
+deckle emit                    # write the output deck directory
+```
+
 ## Technical Details
 
 Detecting a card in an image:

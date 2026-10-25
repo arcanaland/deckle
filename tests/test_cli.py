@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 from pathlib import Path
 
 import cv2
@@ -10,6 +12,7 @@ from test_detect import CARD_MM, DPI, TWO, Placed, jig_scene
 from deckle import build_id
 from deckle.cli import _parser, _settings, main
 from deckle.detect import CardSpec
+from deckle.labels import COMMENT_XATTR
 from deckle.project import PROJECT_FILE, Project, init
 from deckle.staging import read_staging_index
 from deckle.units import DEFAULT_DPI, DEFAULT_STRATEGY, EdgeStrategy
@@ -253,6 +256,130 @@ def test_an_assign_refusal_exits_nonzero(tmp_path, capsys) -> None:
     assert main(argv) == 1
     assert capsys.readouterr().err.startswith("deckle: ")
     assert staged.is_file()
+
+
+# --- assign from labels -----------------------------------------------------------------
+
+
+def label(path: Path | str, text: str) -> None:
+    try:
+        os.setxattr(path, COMMENT_XATTR, text.encode())
+    except OSError as exc:
+        if exc.errno == errno.ENOTSUP:
+            pytest.skip(f"{Path(path).parent} does not support user xattrs")
+        raise
+
+
+@pytest.fixture
+def staged(scan, tmp_path, monkeypatch, capsys) -> tuple[Project, list[Path]]:
+    """Two rectified, indexed files in a project's staging/, cwd at the project root."""
+    project = make_project(tmp_path / "proj")
+    monkeypatch.chdir(project.root)
+    assert main(["rectify", str(scan)]) == 0
+    files = [Path(p) for p in capsys.readouterr().out.split()]
+    return project, files
+
+
+def test_a_dry_run_prints_the_plan_and_moves_nothing(staged, capsys) -> None:
+    project, (first, second) = staged
+    label(first, "m0")
+    label(second, "w7~")
+    assert main(["assign"]) == 0
+    out = capsys.readouterr().out
+    assert out == (
+        f"{first.name} -> major_arcana.00\n"
+        f"{second.name} -> minor_arcana.wands.seven (rotated 180)\n"
+        "staging: 2 files, 2 labelled, 0 unlabelled, 0 problem(s)\n"
+    )
+    assert first.is_file() and second.is_file()
+    assert Project.load(project.root).cards == {}
+
+
+def test_apply_with_a_problem_moves_nothing(staged, capsys) -> None:
+    project, (first, second) = staged
+    label(first, "m0")
+    label(second, "m0~")
+    assert main(["assign", "--apply"]) == 1
+    captured = capsys.readouterr()
+    assert "problem: major_arcana.00 is claimed by 2 files" in captured.out
+    assert "nothing was assigned" in captured.err
+    assert first.is_file() and second.is_file()
+    assert not project.masters_dir.joinpath("major_arcana").exists()
+
+
+def test_a_dry_run_with_problems_exits_1(staged, capsys) -> None:
+    _, (first, _) = staged
+    label(first, "M0")
+    assert main(["assign"]) == 1
+    assert "staging: 2 files, 1 labelled, 1 unlabelled, 1 problem(s)" in capsys.readouterr().out
+
+
+def test_apply_assigns_with_full_provenance(staged, scan, capsys) -> None:
+    project, (first, second) = staged
+    index = read_staging_index(project)
+    label(first, "m0")
+    label(second, "major_arcana.00:alt~")
+    assert main(["assign", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "assigned 2 file(s)" in out
+    assert not first.exists() and not second.exists()
+    assert read_staging_index(project) == {}
+
+    cards = Project.load(project.root).cards
+    assert set(cards) == {"major_arcana.00", "major_arcana.00:alt"}
+    bare, alt = cards["major_arcana.00"], cards["major_arcana.00:alt"]
+    assert (bare["slot"], alt["slot"]) == ("r0c0", "r0c1")
+    assert (bare["rotate_180"], alt["rotate_180"]) == (False, True)
+    for row, name in ((bare, first.name), (alt, second.name)):
+        assert row["source_scan"] == scan.name
+        for key in ("width_mm", "height_mm", "aspect", "skew_deg", "edge_strategy", "dpi"):
+            assert row[key] == index[name][key]
+    assert alt["master"] == "masters/major_arcana/00.alt.png"
+    assert (project.root / alt["master"]).is_file()
+
+
+def test_apply_force_replaces(staged, capsys) -> None:
+    project, (first, second) = staged
+    assert main(["assign", str(first), "major_arcana.00"]) == 0
+    label(second, "m0")
+    capsys.readouterr()
+
+    assert main(["assign", "--apply"]) == 1
+    assert "already has a master" in capsys.readouterr().out
+    assert second.is_file()
+
+    assert main(["assign", "--apply", "--force"]) == 0
+    assert "(replaces masters/major_arcana/00.png)" in capsys.readouterr().out
+    assert not second.exists()
+    assert Project.load(project.root).cards["major_arcana.00"]["slot"] == "r0c1"
+
+
+def test_label_mode_refuses_a_degraded_project(staged, capsys) -> None:
+    project, (first, _) = staged
+    label(first, "m0")
+    (project.root / PROJECT_FILE).unlink()
+    assert main(["assign", "--apply"]) == 1
+    assert capsys.readouterr().err.startswith("deckle: cannot assign: ")
+    assert first.is_file()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["assign", "--variant", "alt"],
+        ["assign", "--card-back", "plain"],
+        ["assign", "--rotate-180"],
+        ["assign", "--apply", "--rotate-180"],
+        ["assign", "x.png", "major_arcana.00", "--apply"],
+        ["assign", "x.png", "major_arcana.00", "--force"],
+        ["assign", "x.png", "--card-back", "plain", "--apply"],
+    ],
+)
+def test_flags_from_the_other_mode_are_usage_errors(argv, capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    assert "usage: deckle assign" in capsys.readouterr().err
 
 
 # --- debug bundles ----------------------------------------------------------------------
