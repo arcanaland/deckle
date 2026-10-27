@@ -9,11 +9,12 @@ import cv2
 import numpy as np
 
 from . import build_id
-from .assign import AssignError, assign
+from .assign import AssignError, assign, unassign
 from .debug import write_bundle
 from .detect import Card, CardSpec, DetectionError, detect_report
 from .emit import EmitError, emit
 from .ids import IdError
+from .labels import plan_staging
 from .project import Config, Project, ProjectError, find_project, init
 from .rectify import rectify_all
 from .render import report, status_report
@@ -230,6 +231,17 @@ def _cmd_status(args) -> int:
 
 
 def _cmd_assign(args) -> int:
+    if args.file is None:
+        stray = [f for f, on in _FILE_ONLY_FLAGS.items() if on(args)]
+        if stray:
+            args.usage(f"{', '.join(stray)} need a file; without one, assign reads labels")
+        return _assign_from_labels(
+            Project.discover(args.project), apply=args.apply, force=args.force
+        )
+    stray = [f for f, on in _LABEL_ONLY_FLAGS.items() if on(args)]
+    if stray:
+        args.usage(f"{', '.join(stray)} only apply without a file, when assign reads labels")
+
     project = Project.discover(args.project)
     ref = args.id
     if ref and args.variant:
@@ -239,6 +251,65 @@ def _cmd_assign(args) -> int:
     print(f"{result.ref} -> {result.dest.relative_to(project.root)}{note}")
     if result.replaced:
         print(f"  removed previous master {result.replaced.relative_to(project.root)}")
+    return 0
+
+
+def _cmd_unassign(args) -> int:
+    project = Project.discover(args.project)
+    for u in unassign(project, args.refs):
+        print(f"{u.ref} -> {u.restaged.relative_to(project.root)}  (label {u.label})")
+        if not u.labelled:
+            print(
+                f"deckle: warning: could not write the label onto {u.restaged.name}; "
+                "label it by hand",
+                file=sys.stderr,
+            )
+    return 0
+
+
+_FILE_ONLY_FLAGS = {
+    "--variant": lambda a: a.variant is not None,
+    "--card-back": lambda a: a.card_back is not None,
+    "--rotate-180": lambda a: a.rotate_180,
+}
+_LABEL_ONLY_FLAGS = {"--apply": lambda a: a.apply, "--force": lambda a: a.force}
+
+
+def _assign_from_labels(project: Project, *, apply: bool, force: bool) -> int:
+    plan = plan_staging(project, force=force)
+
+    for row in plan.rows:
+        print(row.describe(project.root))
+    for w in plan.warnings:
+        print(f"warning: {w}")
+    for p in plan.problems:
+        print(f"problem: {p}")
+    print(f"staging: {plan.summary()}")
+
+    if plan.problems:
+        if apply:
+            print("deckle: nothing was assigned; fix the problems above first", file=sys.stderr)
+        return 1
+    if not apply:
+        return 0
+
+    for done, row in enumerate(plan.rows):
+        try:
+            assign(
+                project,
+                row.source,
+                row.label.ref,
+                card_back=row.label.card_back,
+                rotate_180=row.label.rotate_180,
+            )
+        except (AssignError, ProjectError, IdError, OSError) as exc:
+            print(f"deckle: {row.source.name}: {exc}", file=sys.stderr)
+            print(
+                f"deckle: {done} of {len(plan.rows)} assigned before this; run again to continue",
+                file=sys.stderr,
+            )
+            return 1
+    print(f"assigned {len(plan.rows)} file(s)")
     return 0
 
 
@@ -287,14 +358,31 @@ def _parser() -> argparse.ArgumentParser:
     _project_arg(s)
     s.set_defaults(func=_cmd_status)
 
-    a = sub.add_parser("assign", help="move a staged master into masters/ under a card ID")
-    a.add_argument("file", type=Path, help="the staged master to assign")
+    a = sub.add_parser(
+        "assign",
+        help="move staged masters into masters/ under card IDs",
+        description="With a file, assign it to the given card ID. Without one, read every "
+        "label in staging/, print the plan, and with --apply carry it out.",
+    )
+    a.add_argument("file", type=Path, nargs="?", default=None, help="the staged master to assign")
     a.add_argument("id", nargs="?", default=None, help="card ID, e.g. minor_arcana.cups.king")
     _project_arg(a)
     a.add_argument("--variant", default=None, help="variant key, e.g. two_women")
     a.add_argument("--card-back", default=None, help="assign as a card back design instead")
     a.add_argument("--rotate-180", action="store_true", help="the card was placed upside down")
-    a.set_defaults(func=_cmd_assign)
+    a.add_argument("--apply", action="store_true", help="carry out the plan read from labels")
+    a.add_argument(
+        "--force", action="store_true", help="let the plan replace masters that already exist"
+    )
+    a.set_defaults(func=_cmd_assign, usage=a.error)
+
+    u = sub.add_parser(
+        "unassign",
+        help="put masters back in staging/, labelled, to relabel and assign again",
+    )
+    u.add_argument("refs", nargs="+", metavar="ref", help="a card ID or label, e.g. m2:alt")
+    _project_arg(u)
+    u.set_defaults(func=_cmd_unassign)
 
     e = sub.add_parser("emit", help="generate the deck directory from masters/")
     _project_arg(e)

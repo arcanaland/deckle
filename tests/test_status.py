@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import errno
+import os
+
+import pytest
+
+from deckle.labels import COMMENT_XATTR
 from deckle.project import PROJECT_FILE, Project, init
+from deckle.render import status_report
 from deckle.status import status
 from deckle.units import EdgeStrategy
 
@@ -23,14 +30,90 @@ def test_empty_project_is_zero_of_78(tmp_path):
     assert st.config_problem is None
 
 
-def test_variants_do_not_double_count(tmp_path):
+def test_a_variant_is_listed_under_its_card_not_counted(tmp_path):
     project = make_project(tmp_path)
     touch_master(project, "major_arcana/06.png")
     touch_master(project, "major_arcana/06.two_women.png")
     st = status(project)
-    assert len(st.present) == 2
+    assert [m.ref for m in st.present] == ["major_arcana.06"]
+    assert st.variants == {"major_arcana.06": ["major_arcana.06:two_women"]}
+    assert st.no_default == []
     assert st.total == 78
     assert "major_arcana.06" not in st.missing
+
+
+def test_a_variant_alone_does_not_make_a_card_present(tmp_path, capsys):
+    project = make_project(tmp_path)
+    touch_master(project, "major_arcana/02.crowned.png")
+    touch_master(project, "major_arcana/03.png")
+    st = status(project)
+    assert [m.ref for m in st.present] == ["major_arcana.03"]
+    assert "major_arcana.02" in st.missing and len(st.missing) == 77
+    assert st.no_default == ["major_arcana.02"]
+
+    status_report(st)
+    out = capsys.readouterr().out
+    assert "  1 of 78 roster cards present\n" in out
+    assert "    major_arcana.02  (has variants, but no default master)\n" in out
+    assert (
+        "    major_arcana.02  variants: major_arcana.02:crowned  — missing its default master\n"
+        in out
+    )
+
+
+def test_present_counts_distinct_cards_with_a_bare_master(tmp_path, capsys):
+    project = make_project(tmp_path)
+    for rel in ("major_arcana/06.png", "major_arcana/06.a.png", "major_arcana/06.b.png"):
+        touch_master(project, rel)
+    status_report(status(project))
+    out = capsys.readouterr().out
+    assert "  1 of 78 roster cards present\n" in out
+    assert "    major_arcana.06  variants: major_arcana.06:a, major_arcana.06:b\n" in out
+
+
+def label(path, text: str) -> None:
+    try:
+        os.setxattr(path, COMMENT_XATTR, text.encode())
+    except OSError as exc:
+        if exc.errno == errno.ENOTSUP:
+            pytest.skip(f"{path.parent} does not support user xattrs")
+        raise
+
+
+def test_the_staging_line_counts_the_plan(tmp_path, capsys):
+    project = make_project(tmp_path)
+    touch_master(project, "minor_arcana/wands/seven.png")
+    for name, text in [("a_r0c0.png", "m2"), ("a_r0c1.png", "w7"), ("a_r1c0.png", "M3")]:
+        (project.staging_dir / name).write_bytes(b"pixels")
+        label(project.staging_dir / name, text)
+    (project.staging_dir / "a_r1c1.png").write_bytes(b"pixels")
+
+    st = status(project)
+    # the replace counts as a problem, as in a dry run without --force
+    assert (st.staging.files, st.staging.labelled, st.staging.unlabelled) == (4, 3, 1)
+    assert len(st.staging.problems) == 2
+    status_report(st)
+    out = capsys.readouterr().out
+    assert (
+        "  staging: 4 files, 3 labelled, 1 unlabelled, 2 problem(s)  (deckle assign for detail)\n"
+        in out
+    )
+
+
+def test_no_staged_pngs_means_no_staging_line(tmp_path, capsys):
+    project = make_project(tmp_path)
+    (project.staging_dir / "index.toml").write_text("")
+    st = status(project)
+    assert st.staging is None
+    status_report(st)
+    assert "staging:" not in capsys.readouterr().out
+
+
+def test_a_degraded_project_skips_the_staging_line(tmp_path):
+    project = make_project(tmp_path)
+    (project.staging_dir / "a_r0c0.png").write_bytes(b"pixels")
+    (project.root / PROJECT_FILE).unlink()
+    assert status(Project.load(project.root)).staging is None
 
 
 def test_a_deleted_state_file_reports_no_total(tmp_path):

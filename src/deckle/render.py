@@ -29,6 +29,7 @@ def report(cards: list[Card], scan: Path) -> None:
 
 
 def status_report(st: Status) -> None:
+    no_default = set(st.no_default)
     print(f"{st.root}")
     if st.config_problem:
         print(f"  {st.config_problem}")
@@ -42,15 +43,23 @@ def status_report(st: Status) -> None:
         for m in st.present:
             print(f"    {m.ref}")
     else:
-        print(f"  {len(st.present)} of {st.total} roster cards present")
+        print(f"  {st.total - len(st.missing)} of {st.total} roster cards present")
+        if st.staging is not None:
+            print(f"  staging: {st.staging.summary()}  (deckle assign for detail)")
         if st.missing:
             print(f"  missing ({len(st.missing)}):")
             for ref in st.missing:
-                print(f"    {ref}")
+                note = "  (has variants, but no default master)" if ref in no_default else ""
+                print(f"    {ref}{note}")
         if st.unexpected:
             print(f"  present but not in the roster ({len(st.unexpected)}) — the roster is wrong:")
             for ref in st.unexpected:
                 print(f"    {ref}")
+    if st.variants:
+        print(f"  cards with variants ({len(st.variants)}):")
+        for card, refs in st.variants.items():
+            note = "  — missing its default master" if card in no_default else ""
+            print(f"    {card}  variants: {', '.join(refs)}{note}")
     if st.backs:
         print(f"  card backs ({len(st.backs)}): {', '.join(st.backs)}")
     if st.strays:
